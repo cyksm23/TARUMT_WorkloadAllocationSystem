@@ -1,0 +1,19 @@
+# Frontend (Next.js)
+node_modules/
+.next/
+out/
+.env*.local
+
+# PHP
+vendor/
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
