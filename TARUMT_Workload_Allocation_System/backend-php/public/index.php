@@ -41,5 +41,13 @@ $send = function (int $code, array $payload): void {
 
 match (true) {
     $path === '/api/health' => $send(200, ['status' => 'ok', 'service' => 'php-api']),
+
+    // Auth — verifies 4-digit lecturer code (staff_id 'L1001' -> '1001',
+    // '0000' -> admin) + bcrypt password against the users/lecturers tables.
+    $path === '/api/auth/login' && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' => (function () use ($send) {
+        require_once dirname(__DIR__) . '/controllers/AuthController.php';
+        (new AuthController())->login();
+    })(),
+
     default                 => $send(404, ['status' => 'error', 'message' => 'Route not found']),
 };

@@ -7,3 +7,129 @@ body {
   color: #424245;
   font-family: Inter, "Helvetica Neue", Arial, sans-serif;
 }
+
+/* ── animations (React Bits–style copy-ins) ─────────────────────────── */
+
+/* ShinyText — light sweep across text (theme: main heading → primary → heading) */
+.shiny-text {
+  color: transparent;
+  background: linear-gradient(
+    120deg,
+    #1d1d1f 30%,
+    #0071e3 46%,
+    #0071e3 54%,
+    #1d1d1f 70%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shine 3s linear infinite;
+}
+
+@keyframes shine {
+  0% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: -100% center;
+  }
+}
+
+/* floating blobs behind the login panels */
+@keyframes blob {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(40px, -30px) scale(1.08);
+  }
+  66% {
+    transform: translate(-25px, 20px) scale(0.95);
+  }
+}
+
+.animate-blob {
+  animation: blob 14s ease-in-out infinite;
+}
+
+.animate-blob-slow {
+  animation: blob 20s ease-in-out infinite reverse;
+}
+
+/* error shake on the login card */
+@keyframes shake {
+  10%,
+  90% {
+    transform: translateX(-2px);
+  }
+  20%,
+  80% {
+    transform: translateX(3px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-5px);
+  }
+  40%,
+  60% {
+    transform: translateX(5px);
+  }
+}
+
+.animate-shake {
+  animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+/* pop for success/failure icons on the login result pages */
+@keyframes pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-pop {
+  animation: pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* typewriter caret blink */
+@keyframes caretBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.animate-caret {
+  display: inline-block;
+  animation: caretBlink 1s step-end infinite;
+}
+
+/* softly drifting login particles */
+@keyframes float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -22px, 0);
+  }
+}
+
+.animate-float {
+  animation-name: float;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+

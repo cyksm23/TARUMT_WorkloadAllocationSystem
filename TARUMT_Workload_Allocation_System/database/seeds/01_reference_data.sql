@@ -1,8 +1,11 @@
 ﻿-- ============================================================
 -- Seeds -> 01_reference_data.sql
--- TARUMT Sabah branch sample data (reference data only)
--- Password for ALL seeded accounts: password123
---   (bcrypt, generated via pgcrypto -> gen_salt('bf',10))
+-- TARUMT Sabah branch — REAL DCIT staff roster (source: SB Teaching
+-- Workload 202401.xlsx / user-provided snapshot, Oct 2026)
+--
+-- Staff IDs are the plain 4-digit TARUMT staff numbers
+-- (e.g. '1001'); the 4-digit login code = staff_id.
+-- All accounts: password 'password123' (bcrypt via pgcrypto).
 -- ============================================================
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -10,7 +13,7 @@ BEGIN;
 
 -- Departments ------------------------------------------------
 INSERT INTO departments (department_code, department_name, description) VALUES
- ('DCIT','Department of Computing and Information Technology','Computing & IT programmes (DSF, DFT, RSD, AICS)'),
+ ('DCIT','Department of Computing and Information Technology','Computing & IT programmes (DSF, DFT, RSD)'),
  ('DACB','Department of Accounting and Business','Accounting & business programmes'),
  ('DSSH','Department of Social Science and Hospitality','Social science & hospitality programmes');
 
@@ -35,68 +38,64 @@ INSERT INTO semesters (academic_year_id, semester_name, semester_code, start_dat
  ((SELECT id FROM academic_years WHERE year_code='2025/2026'),'Semester 1','S1','2025-06-23','2025-10-26',14,TRUE),
  ((SELECT id FROM academic_years WHERE year_code='2025/2026'),'Semester 2','S2','2025-12-01','2026-04-19',14,FALSE);
 
--- Users  (role seed; all bcrypt password123) -----------------
--- admin user
+-- ============================================================
+-- USERS  (id 1..19 = lecturers, id 20 = admin)
+-- role: 'coordinator' = Programme Leader (is_PL), else 'lecturer'
+-- ============================================================
 INSERT INTO users (username, password_hash, email, role) VALUES
- ('admin', crypt('password123', gen_salt('bf',10)),'admin@tarc.edu.my','admin');
+ ('surayaini',    crypt('password123', gen_salt('bf',10)),'surayaini@tarc.edu.my',      'coordinator'),   --  1
+ ('nurrahmat',    crypt('password123', gen_salt('bf',10)),'mohdnurrahmat@tarc.edu.my',  'coordinator'),   --  2
+ ('christopher',  crypt('password123', gen_salt('bf',10)),'christopherl@tarc.edu.my',   'lecturer'),      --  3
+ ('chew.th',      crypt('password123', gen_salt('bf',10)),'chewth@tarc.edu.my',         'lecturer'),      --  4
+ ('leeyeefong',   crypt('password123', gen_salt('bf',10)),'leeyeefong@tarc.edu.my',     'lecturer'),      --  5
+ ('tengns',       crypt('password123', gen_salt('bf',10)),'tengns@tarc.edu.my',         'lecturer'),      --  6
+ ('patriciagk',   crypt('password123', gen_salt('bf',10)),'patriciagk@tarc.edu.my',     'lecturer'),      --  7
+ ('ellis.chieng', crypt('password123', gen_salt('bf',10)),'chienge@tarc.edu.my',        'lecturer'),      --  8
+ ('norshikin',    crypt('password123', gen_salt('bf',10)),'norshikin@tarc.edu.my',      'lecturer'),      --  9
+ ('jefther',      crypt('password123', gen_salt('bf',10)),'jeftheredward@tarc.edu.my',  'lecturer'),      -- 10
+ ('daniel.royd',  crypt('password123', gen_salt('bf',10)),'danielroyd@tarc.edu.my',     'lecturer'),      -- 11
+ ('limjz',        crypt('password123', gen_salt('bf',10)),'limjz@tarc.edu.my',          'lecturer'),      -- 12
+ ('juramizan',    crypt('password123', gen_salt('bf',10)),'p3984@tarc.edu.my',          'lecturer'),      -- 13
+ ('andy.liew',    crypt('password123', gen_salt('bf',10)),'p4038@tarc.edu.my',          'lecturer'),      -- 14
+ ('paul.peter',   crypt('password123', gen_salt('bf',10)),'p3985@tarc.edu.my',          'lecturer'),      -- 15
+ ('harry.chung',  crypt('password123', gen_salt('bf',10)),'p4018@tarc.edu.my',          'lecturer'),      -- 16
+ ('paula',        crypt('password123', gen_salt('bf',10)),'p3950@tarc.edu.my',          'lecturer'),      -- 17
+ ('natasha',      crypt('password123', gen_salt('bf',10)),'p3939@tarc.edu.my',          'lecturer'),      -- 18
+ ('afendy',       crypt('password123', gen_salt('bf',10)),'p3970@tarc.edu.my',          'lecturer'),      -- 19
+ ('admin',        crypt('password123', gen_salt('bf',10)),'admin@tarc.edu.my',          'admin');         -- 20
 
--- 15 full-time lecturers (user row + lecturer row)
-INSERT INTO users (username, password_hash, email, role) VALUES
- ('ellis.chieng',     crypt('password123', gen_salt('bf',10)),'ellis.chieng@tarc.edu.my',     'lecturer'),
- ('chris.lazarus',    crypt('password123', gen_salt('bf',10)),'christopher.lazarus@tarc.edu.my','lecturer'),
- ('teng.ngasing',     crypt('password123', gen_salt('bf',10)),'teng.ngasing@tarc.edu.my',     'lecturer'),
- ('lee.yeefong',      crypt('password123', gen_salt('bf',10)),'lee.yeefong@tarc.edu.my',      'lecturer'),
- ('patricia.kissol',  crypt('password123', gen_salt('bf',10)),'patricia.kissol@tarc.edu.my',  'lecturer'),
- ('surayaini.basri',  crypt('password123', gen_salt('bf',10)),'surayaini.basri@tarc.edu.my',  'lecturer'),
- ('norshikin.zainal', crypt('password123', gen_salt('bf',10)),'norshikin.zainal@tarc.edu.my', 'lecturer'),
- ('jefther.edwards',  crypt('password123', gen_salt('bf',10)),'jefther.edwards@tarc.edu.my',  'lecturer'),
- ('daniel.royd',      crypt('password123', gen_salt('bf',10)),'daniel.royd@tarc.edu.my',      'lecturer'),
- ('lim.jiazheng',     crypt('password123', gen_salt('bf',10)),'lim.jiazheng@tarc.edu.my',     'lecturer'),
- ('nur.rahmat',       crypt('password123', gen_salt('bf',10)),'nurrahmat.taat@tarc.edu.my',   'lecturer'),
- ('muada.ojihi',      crypt('password123', gen_salt('bf',10)),'muada.ojihi@tarc.edu.my',      'lecturer'),
- ('kenny.chung',      crypt('password123', gen_salt('bf',10)),'kenny.chung@tarc.edu.my',      'lecturer'),
- ('joanne.lo',        crypt('password123', gen_salt('bf',10)),'joanne.lo@tarc.edu.my',        'lecturer'),
- ('rita.kwan',        crypt('password123', gen_salt('bf',10)),'rita.kwan@tarc.edu.my',        'lecturer');
+-- ============================================================
+-- LECTURERS — full-time (staff_id 1001..1012)
+-- ============================================================
+INSERT INTO lecturers (staff_id, user_id, department_id, full_name, email, position, is_pl, qualifications, specialization, area_of_interest, employment_type, max_workload_hours) VALUES
+ ('1001',(SELECT id FROM users WHERE username='surayaini'),    (SELECT id FROM departments WHERE department_code='DCIT'),'Pn. Surayaini Binti Basri','surayaini@tarc.edu.my','Programme Leader',   TRUE ,'BCompSc (UMP), MSc (UMS)','Software Engineering','Natural Language Processing','FULL_TIME',12.00),
+ ('1002',(SELECT id FROM users WHERE username='nurrahmat'),    (SELECT id FROM departments WHERE department_code='DCIT'),'En. Mohd Nur Rahmat Bin Mohd Taat','mohdnurrahmat@tarc.edu.my','Programme Leader', TRUE,'BCompSc (Hons) (UMS), MSc (Sund.)','Computer Science','Cybersecurity, Networking, Human Computer Interaction','FULL_TIME',12.00),
+ ('1003',(SELECT id FROM users WHERE username='christopher'),  (SELECT id FROM departments WHERE department_code='DCIT'),'Dr. Christopher Lazarus','christopherl@tarc.edu.my','Assistant Professor', FALSE,'BSc (Portsm), PhD (Essex)','Evolutionary Computation, Robotics','Artificial Intelligence, Machine Learning','FULL_TIME',16.00),
+ ('1004',(SELECT id FROM users WHERE username='chew.th'),      (SELECT id FROM departments WHERE department_code='DCIT'),'Dr. Chew Tze Ha','chewth@tarc.edu.my','Assistant Professor', FALSE,'DipIT, BIT (Hons), MInfTech (OUM), PhD (UMS)','Computer Science, IT','Cloud Computing, Programming','FULL_TIME',16.00),
+ ('1005',(SELECT id FROM users WHERE username='leeyeefong'),   (SELECT id FROM departments WHERE department_code='DCIT'),'Pn. Lee Yee Fong','leeyeefong@tarc.edu.my','Senior Lecturer', FALSE,'BIT (Hons) (UMS), MSc (USM)','Information and Communication Technology Management','Multimedia, Human Computer Interaction','FULL_TIME',16.00),
+ ('1006',(SELECT id FROM users WHERE username='tengns'),       (SELECT id FROM departments WHERE department_code='DCIT'),'Pn. Teng Nga Sing','tengns@tarc.edu.my','Senior Lecturer', FALSE,'BIT (Hons), MSc (UMS)','Computer Science','Database, Programming, Analysis and Design of IS, MIS','FULL_TIME',16.00),
+ ('1007',(SELECT id FROM users WHERE username='patriciagk'),   (SELECT id FROM departments WHERE department_code='DCIT'),'Pn. Patricia G Kissol','patriciagk@tarc.edu.my','Senior Lecturer', FALSE,'BSc (Hons) (Brad), MEd (UMS)','Mathematics and Statistics','Learning Approaches in Education','FULL_TIME',16.00),
+ ('1008',(SELECT id FROM users WHERE username='ellis.chieng'), (SELECT id FROM departments WHERE department_code='DCIT'),'Cik Ellis Chieng','chienge@tarc.edu.my','Lecturer', FALSE,'BSc (Hons) (UTM), MInfTech candidate','Computer Science, IT','Cloud Computing, Programming','FULL_TIME',16.00),
+ ('1009',(SELECT id FROM users WHERE username='norshikin'),    (SELECT id FROM departments WHERE department_code='DCIT'),'Ts. Norshikin Binti Zainal Abidin','norshikin@tarc.edu.my','Lecturer', FALSE,'BCompSc (Hons), MCompSc (UMS), P.Tech., PhD candidate','HCI, Gamification & Mobile Application','Human Computer Interaction','FULL_TIME',16.00),
+ ('1010',(SELECT id FROM users WHERE username='jefther'),      (SELECT id FROM departments WHERE department_code='DCIT'),'En. Jefther Edward','jeftheredward@tarc.edu.my','Lecturer', FALSE,'BCompSc (Hons) (UNIMAS), MEd (UMS)','Web Development and Software Development','Software Design, Software Architecture, ICT in Education and Architecture','FULL_TIME',16.00),
+ ('1011',(SELECT id FROM users WHERE username='daniel.royd'),  (SELECT id FROM departments WHERE department_code='DCIT'),'En. Daniel Royd Michael','danielroyd@tarc.edu.my','Lecturer', FALSE,'BSc (Hons) (KLMUC), MInfComnTechMgt (AeU), CCNA certified','Computer Networking','Network PenTesting, RF Manipulation','FULL_TIME',16.00),
+ ('1012',(SELECT id FROM users WHERE username='limjz'),        (SELECT id FROM departments WHERE department_code='DCIT'),'En. Lim Jia Zheng','limjz@tarc.edu.my','Lecturer', FALSE,'BCompSc (Hons), MSc (UMS), PhD candidate','Computer Science','Machine Learning, Affective Computing','FULL_TIME',16.00);
 
--- 7 part-time lecturers
-INSERT INTO users (username, password_hash, email, role) VALUES
- ('juramizan', crypt('password123', gen_salt('bf',10)),'juramizan@tarc.edu.my','lecturer'),
- ('andy.liew', crypt('password123', gen_salt('bf',10)),'andy.liew@tarc.edu.my','lecturer'),
- ('paul.peter',crypt('password123', gen_salt('bf',10)),'paul.peter@tarc.edu.my','lecturer'),
- ('harry.chung',crypt('password123', gen_salt('bf',10)),'harry.chung@tarc.edu.my','lecturer'),
- ('paula',     crypt('password123', gen_salt('bf',10)),'paula@tarc.edu.my','lecturer'),
- ('natasha',   crypt('password123', gen_salt('bf',10)),'natasha@tarc.edu.my','lecturer'),
- ('afendy',    crypt('password123', gen_salt('bf',10)),'afendy@tarc.edu.my','lecturer');
+-- ============================================================
+-- LECTURERS — part-time (staff_id 3950, 3939, 3970, 3984, 3985, 4018, 4038)
+-- ============================================================
+INSERT INTO lecturers (staff_id, user_id, department_id, full_name, email, position, is_pl, qualifications, specialization, area_of_interest, employment_type, max_workload_hours) VALUES
+ ('3984',(SELECT id FROM users WHERE username='juramizan'),   (SELECT id FROM departments WHERE department_code='DCIT'),'JurAmizan','p3984@tarc.edu.my','Lecturer', FALSE, NULL, NULL, NULL,'PART_TIME',8.00),
+ ('4038',(SELECT id FROM users WHERE username='andy.liew'),   (SELECT id FROM departments WHERE department_code='DCIT'),'Andy Liew Pik Hern','p4038@tarc.edu.my','Lecturer', FALSE, NULL, NULL, NULL,'PART_TIME',8.00),
+ ('3985',(SELECT id FROM users WHERE username='paul.peter'),  (SELECT id FROM departments WHERE department_code='DCIT'),'Paul Peter','p3985@tarc.edu.my','Lecturer', FALSE, NULL, NULL, NULL,'PART_TIME',8.00),
+ ('4018',(SELECT id FROM users WHERE username='harry.chung'), (SELECT id FROM departments WHERE department_code='DCIT'),'Harry Chung','p4018@tarc.edu.my','Lecturer', FALSE, NULL, NULL, NULL,'PART_TIME',8.00),
+ ('3950',(SELECT id FROM users WHERE username='paula'),       (SELECT id FROM departments WHERE department_code='DCIT'),'Paula','p3950@tarc.edu.my','Lecturer', FALSE, NULL, NULL, NULL,'PART_TIME',8.00),
+ ('3939',(SELECT id FROM users WHERE username='natasha'),     (SELECT id FROM departments WHERE department_code='DCIT'),'Natasha','p3939@tarc.edu.my','Lecturer', FALSE, NULL, NULL, NULL,'PART_TIME',8.00),
+ ('3970',(SELECT id FROM users WHERE username='afendy'),      (SELECT id FROM departments WHERE department_code='DCIT'),'Afendy','p3970@tarc.edu.my','Lecturer', FALSE, NULL, NULL, NULL,'PART_TIME',8.00);
 
--- Lecturers (full-time) --------------------------------------
-INSERT INTO lecturers (staff_id, user_id, department_id, full_name, email, position, employment_type, max_workload_hours) VALUES
- ('L1001',(SELECT id FROM users WHERE username='ellis.chieng'),    (SELECT id FROM departments WHERE department_code='DCIT'),'Ellis Chieng','ellis.chieng@tarc.edu.my','Programme Leader','FULL_TIME',12.00),
- ('L1002',(SELECT id FROM users WHERE username='chris.lazarus'),   (SELECT id FROM departments WHERE department_code='DCIT'),'Dr. Christopher Lazarus','christopher.lazarus@tarc.edu.my','Head of Programme','FULL_TIME',12.00),
- ('L1003',(SELECT id FROM users WHERE username='teng.ngasing'),    (SELECT id FROM departments WHERE department_code='DCIT'),'Teng Nga Sing','teng.ngasing@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1004',(SELECT id FROM users WHERE username='lee.yeefong'),     (SELECT id FROM departments WHERE department_code='DCIT'),'Lee Yee Fong','lee.yeefong@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1005',(SELECT id FROM users WHERE username='patricia.kissol'), (SELECT id FROM departments WHERE department_code='DCIT'),'Patricia Kissol','patricia.kissol@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1006',(SELECT id FROM users WHERE username='surayaini.basri'), (SELECT id FROM departments WHERE department_code='DCIT'),'Surayaini Bt Basri','surayaini.basri@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1007',(SELECT id FROM users WHERE username='norshikin.zainal'),(SELECT id FROM departments WHERE department_code='DCIT'),'Norshikin Bt Zainal Abidin','norshikin.zainal@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1008',(SELECT id FROM users WHERE username='jefther.edwards'), (SELECT id FROM departments WHERE department_code='DCIT'),'Jefther Edwards','jefther.edwards@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1009',(SELECT id FROM users WHERE username='daniel.royd'),     (SELECT id FROM departments WHERE department_code='DCIT'),'Daniel Royd','daniel.royd@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1010',(SELECT id FROM users WHERE username='lim.jiazheng'),    (SELECT id FROM departments WHERE department_code='DCIT'),'Lim Jia Zheng','lim.jiazheng@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1011',(SELECT id FROM users WHERE username='nur.rahmat'),      (SELECT id FROM departments WHERE department_code='DCIT'),'Mohd Nur Rahmat bin Mohd Taat','nurrahmat.taat@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1012',(SELECT id FROM users WHERE username='muada.ojihi'),     (SELECT id FROM departments WHERE department_code='DCIT'),'Muada Bin Ojihi','muada.ojihi@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1013',(SELECT id FROM users WHERE username='kenny.chung'),     (SELECT id FROM departments WHERE department_code='DCIT'),'Kenny Chung Kuan Tsin','kenny.chung@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1014',(SELECT id FROM users WHERE username='joanne.lo'),       (SELECT id FROM departments WHERE department_code='DCIT'),'Joanne Lo','joanne.lo@tarc.edu.my','Lecturer','FULL_TIME',16.00),
- ('L1015',(SELECT id FROM users WHERE username='rita.kwan'),       (SELECT id FROM departments WHERE department_code='DCIT'),'Kwan Lee Kun Rita','rita.kwan@tarc.edu.my','Lecturer','FULL_TIME',16.00);
-
--- Lecturers (part-time) --------------------------------------
-INSERT INTO lecturers (staff_id, user_id, department_id, full_name, email, position, employment_type, max_workload_hours) VALUES
- ('L2001',(SELECT id FROM users WHERE username='juramizan'), (SELECT id FROM departments WHERE department_code='DCIT'),'JurAmizan','juramizan@tarc.edu.my','Part-time Lecturer','PART_TIME',12.00),
- ('L2002',(SELECT id FROM users WHERE username='andy.liew'), (SELECT id FROM departments WHERE department_code='DCIT'),'Andy Liew Pik Hern','andy.liew@tarc.edu.my','Part-time Lecturer','PART_TIME',12.00),
- ('L2003',(SELECT id FROM users WHERE username='paul.peter'),(SELECT id FROM departments WHERE department_code='DACB'),'Paul Peter','paul.peter@tarc.edu.my','Part-time Lecturer','PART_TIME',12.00),
- ('L2004',(SELECT id FROM users WHERE username='harry.chung'),(SELECT id FROM departments WHERE department_code='DACB'),'Harry Chung','harry.chung@tarc.edu.my','Part-time Lecturer','PART_TIME',12.00),
- ('L2005',(SELECT id FROM users WHERE username='paula'),     (SELECT id FROM departments WHERE department_code='DSSH'),'Paula','paula@tarc.edu.my','Part-time Lecturer','PART_TIME',12.00),
- ('L2006',(SELECT id FROM users WHERE username='natasha'),   (SELECT id FROM departments WHERE department_code='DSSH'),'Natasha','natasha@tarc.edu.my','Part-time Lecturer','PART_TIME',12.00),
- ('L2007',(SELECT id FROM users WHERE username='afendy'),    (SELECT id FROM departments WHERE department_code='DSSH'),'Afendy','afendy@tarc.edu.my','Part-time Lecturer','PART_TIME',12.00);
-
--- Subjects (DCIT sample; first 2 also used across semesters) --
+-- ============================================================
+-- SUBJECTS (sample from the teaching workload sheet)
+-- ============================================================
 INSERT INTO subjects (subject_code, subject_name, programme_id, semester_id, credit_hours, lecture_hours, tutorial_hours, practical_hours, total_hours, student_count, group_count) VALUES
  ('AACS2204','Object-Oriented Programming Techniques',  (SELECT id FROM programmes WHERE programme_code='DSF'),(SELECT id FROM semesters WHERE semester_code='S1' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2025/2026')),4.0,2.0,1.0,2.0,5.0,120,6),
  ('AACS3013','Database Development and Applications',   (SELECT id FROM programmes WHERE programme_code='DSF'),(SELECT id FROM semesters WHERE semester_code='S1' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2025/2026')),3.0,2.0,1.0,1.0,4.0,80 ,4),

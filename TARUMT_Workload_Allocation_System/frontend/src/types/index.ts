@@ -46,13 +46,17 @@ export interface Department {
 
 export interface Lecturer {
   id: number;
-  staff_id: string; // 'L1001'
+  staff_id: string; // '1001' (4-digit staff number, plain digits)
   user_id: number | null;
   department_id: number | null;
   full_name: string;
   email: string | null;
   phone_number: string | null;
   position: string | null;
+  is_pl: boolean;
+  qualifications: string | null;
+  specialization: string | null;
+  area_of_interest: string | null;
   employment_type: "FULL_TIME" | "PART_TIME" | "CONTRACT";
   is_active: boolean;
   max_workload_hours: number;

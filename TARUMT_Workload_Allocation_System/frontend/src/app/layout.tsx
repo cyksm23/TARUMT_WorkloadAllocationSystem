@@ -6,7 +6,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 // Future: app shell = Sidebar + TopNav wrapping page content.
 export const metadata: Metadata = {
-  title: "TARUMT Teaching Workload System",
+  title: "TARUMT Workload Allocation System",
   description:
     "Distribute teaching responsibilities, track lecturer workloads, OT claims and approvals.",
 };

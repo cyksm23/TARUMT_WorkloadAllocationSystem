@@ -67,6 +67,10 @@ CREATE TABLE lecturers (
     email              VARCHAR(150) UNIQUE,
     phone_number       VARCHAR(20)  NULL,
     position           VARCHAR(100) NULL,
+    is_pl              BOOLEAN      NOT NULL DEFAULT FALSE,
+    qualifications     TEXT         NULL,          -- e.g. 'BCompSc (UMP), MSc (UMS)'
+    specialization     TEXT         NULL,
+    area_of_interest   TEXT         NULL,
     employment_type    VARCHAR(30)  NOT NULL DEFAULT 'FULL_TIME',
         CHECK (employment_type IN ('FULL_TIME','PART_TIME','CONTRACT')),
     is_active          BOOLEAN      DEFAULT TRUE,

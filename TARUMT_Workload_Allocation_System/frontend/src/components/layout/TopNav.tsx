@@ -6,7 +6,7 @@
 export default function TopNav() {
   return (
     <header className="flex h-16 items-center justify-between border-b border-divider bg-surface px-md">
-      <span className="text-sm text-textSecondary">TARUMT Teaching Workload System</span>
+      <span className="text-[16px] font-semibold text-text">TARUMT Workload Allocation System</span>
     </header>
   );
 }
