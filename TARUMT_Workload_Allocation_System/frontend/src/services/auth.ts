@@ -96,7 +96,7 @@ export async function login(code: string, password: string): Promise<AuthSession
   if (php.status === 200 && isSession(php.data)) return php.data;
   if (php.status >= 400 && php.status < 500) {
     const d = php.data as { message?: string };
-    throw new LoginError(d.message ?? "Invalid lecturer code or password.", "invalid");
+    throw new LoginError(d.message ?? "Invalid Staff ID or password.", "invalid");
   }
   // status 0 (PHP not running) or 5xx (e.g. DB not reachable / pdo_pgsql off)
   //  → continue to the Next.js route handler.
@@ -108,5 +108,5 @@ export async function login(code: string, password: string): Promise<AuthSession
     throw new LoginError("Cannot reach any auth service. Is the dev server running?", "network");
   }
   const d = local.data as { message?: string };
-  throw new LoginError(d.message ?? "Invalid lecturer code or password.", local.status === 403 ? "deactivated" : "invalid");
+  throw new LoginError(d.message ?? "Invalid Staff ID or password.", local.status === 403 ? "deactivated" : "invalid");
 }

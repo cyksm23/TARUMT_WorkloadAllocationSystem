@@ -25,7 +25,7 @@ final class AuthController
         $password = (string)($input['password'] ?? '');
 
         if (! preg_match('/^\d{4}$/', $code)) {
-            $this->json(400, ['ok' => false, 'message' => 'Lecturer code must be exactly 4 digits.']);
+            $this->json(400, ['ok' => false, 'message' => 'Staff ID must be exactly 4 digits.']);
             return;
         }
         if ($password === '') {
@@ -59,7 +59,7 @@ final class AuthController
         }
 
         if (! $user || ! password_verify($password, (string)$user['password_hash'])) {
-            $this->json(401, ['ok' => false, 'message' => 'Invalid lecturer code or password.']);
+            $this->json(401, ['ok' => false, 'message' => 'Invalid Staff ID or password.']);
             return;
         }
         if ($user['is_active'] === false) {

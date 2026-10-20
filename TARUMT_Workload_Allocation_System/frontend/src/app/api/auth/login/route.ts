@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
   const code = String(body.code ?? "").trim();
   const password = String(body.password ?? "");
 
-  if (!/^\d{4}$/.test(code)) return fail(400, "Lecturer code must be exactly 4 digits.");
+  if (!/^\d{4}$/.test(code)) return fail(400, "Staff ID must be exactly 4 digits.");
   if (!password) return fail(400, "Password is required.");
 
   /* 1 ── try the database first ───────────────────────────────────────────── */
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     const row: DbRow | undefined = rows[0];
     if (row) {
       const valid = await bcrypt.compare(password, row.password_hash);
-      if (!valid) return fail(401, "Invalid lecturer code or password.");
+      if (!valid) return fail(401, "Invalid Staff ID or password.");
       if (!row.is_active) return fail(403, "This account is deactivated.");
 
       getPool()
@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
         user,
       });
     }
-    return fail(401, "Lecturer code not found.");
+    return fail(401, "Staff ID not found.");
   } catch (dbError) {
     /* 2 ── DEV fallback when the DB is not initialised yet ─────────────────── */
     if (fallbackAllowed()) {
@@ -151,8 +151,8 @@ export async function POST(req: NextRequest) {
         dbError instanceof Error ? dbError.message : dbError
       );
       const match = DEV_DIRECTORY.find((d: DevLecturer) => d.code === code);
-      if (!match) return fail(401, "Lecturer code not found.");
-      if (password !== DEV_PASSWORD) return fail(401, "Invalid lecturer code or password.");
+      if (!match) return fail(401, "Staff ID not found.");
+      if (password !== DEV_PASSWORD) return fail(401, "Invalid Staff ID or password.");
 
       const user: LoginUser = {
         id: null,
