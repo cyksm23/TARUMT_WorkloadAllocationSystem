@@ -24,15 +24,6 @@ const ROLE_LABEL: Record<AuthSession["user"]["role"], string> = {
 export default function TopNav({ session }: TopNavProps) {
   const router = useRouter();
 
-  const initials = session.user.fullName
-    .split(" ")
-    .filter(Boolean)
-    .slice(-2)
-    .map((p) => p[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-
   const signOut = () => {
     clearAuth();
     router.replace("/login");
@@ -61,9 +52,6 @@ export default function TopNav({ session }: TopNavProps) {
 
         {/* user chip */}
         <div className="flex items-center gap-sm">
-          <span className="flex h-9 w-9 items-center justify-center rounded-badge bg-primaryLight text-[12px] font-semibold text-primary">
-            {initials || "PL"}
-          </span>
           <div className="hidden leading-tight sm:block">
             <p className="text-[13px] font-medium text-text">{session.user.fullName}</p>
             <p className="text-[11px] text-textSecondary">

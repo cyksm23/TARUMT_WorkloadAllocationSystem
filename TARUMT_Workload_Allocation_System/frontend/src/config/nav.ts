@@ -96,4 +96,6 @@ export interface RailCounts {
   allocations: number;
   overLimit: number;
   subjects: number;
+  /** lecturers whose saved limit pair is outside the rules' allowed range */
+  lecturersOverRules: number;
 }

@@ -1,7 +1,7 @@
 ﻿-- ============================================================
 -- TARUMT Teaching Workload Allocation System
 -- PostgreSQL 15+ schema  |  DB: teaching_workload_db
--- 9 tables, 3 views, 11 indexes
+-- 11 tables, 3 views, 11 indexes
 -- Run order: tables -> indexes -> views
 -- ============================================================
 
@@ -74,9 +74,16 @@ CREATE TABLE lecturers (
     employment_type    VARCHAR(30)  NOT NULL DEFAULT 'FULL_TIME',
         CHECK (employment_type IN ('FULL_TIME','PART_TIME','CONTRACT')),
     is_active          BOOLEAN      DEFAULT TRUE,
-    max_workload_hours NUMERIC(5,2) DEFAULT 40.00,
+    max_workload_hours NUMERIC(5,2) DEFAULT 40.00,  -- legacy; superseded by min/max_limit_hours
+    -- Materialized per-lecturer limits: seeded from workload_rules, then
+    -- snapshot-stable. Rules edits NEVER rewrite these; stored pairs that
+    -- no longer match the lecturer's rule (or exceed the rules ceiling)
+    -- surface the red warning badge for manual modification.
+    min_limit_hours    NUMERIC(5,2) NOT NULL,
+    max_limit_hours    NUMERIC(5,2) NOT NULL,
     created_at         TIMESTAMP    DEFAULT NOW(),
-    updated_at         TIMESTAMP    DEFAULT NOW()
+    updated_at         TIMESTAMP    DEFAULT NOW(),
+    CONSTRAINT ck_lecturers_limit_range CHECK (min_limit_hours <= max_limit_hours)
 );
 
 -- 6) programmes ---------------------------------------------
@@ -154,10 +161,34 @@ CREATE TABLE workload_history (
     changed_at  TIMESTAMP DEFAULT NOW()
 );
 
+-- 11) workload_rules ----------------------------------------
+-- Role / course-based hour limits (editable by the PL). A lecturer's
+-- limits resolve in priority order: the Programme Leader ROLE rule wins;
+-- otherwise the COURSES rules match the programme levels actually taught
+-- (Bachelor only / Diploma only / both); DEFAULT covers staff with no
+-- assignments yet. min/max pairs are editable per rule.
+CREATE TABLE workload_rules (
+    rule_key   VARCHAR(30) PRIMARY KEY,
+    label      VARCHAR(100) NOT NULL,
+    basis      VARCHAR(20)  NOT NULL DEFAULT 'COURSES',
+        CHECK (basis IN ('ROLE','COURSES','GLOBAL')),
+    priority   INTEGER      NOT NULL DEFAULT 10,
+    min_hours  NUMERIC(5,2) NOT NULL,
+    max_hours  NUMERIC(5,2) NOT NULL,
+    updated_at TIMESTAMP    DEFAULT NOW(),
+    CONSTRAINT ck_rule_range CHECK (min_hours <= max_hours)
+);
+
+INSERT INTO workload_rules (rule_key, label, basis, priority, min_hours, max_hours) VALUES
+  ('PL',            'Programme Leader (role)',     'ROLE',     1, 12, 20),
+  ('BACHELOR_ONLY', 'Teaching Bachelor only',      'COURSES', 10, 16, 20),
+  ('DIPLOMA_ONLY',  'Teaching Diploma only',       'COURSES', 10, 18, 20),
+  ('BOTH',          'Teaching Diploma & Bachelor', 'COURSES', 10, 17, 20),
+  ('DEFAULT',       'No courses assigned yet',     'GLOBAL',  99, 12, 20);
+
 -- ============================================================
 -- INDEXES (11)
--- ============================================================
-CREATE INDEX idx_lecturers_department       ON lecturers(department_id);
+-- ============================================================CREATE INDEX idx_lecturers_department       ON lecturers(department_id);
 CREATE INDEX idx_lecturers_staff_id         ON lecturers(staff_id);
 CREATE INDEX idx_subjects_programme         ON subjects(programme_id);
 CREATE INDEX idx_subjects_semester          ON subjects(semester_id);
@@ -173,13 +204,42 @@ CREATE INDEX idx_academic_years_active      ON academic_years(is_active) WHERE i
 -- VIEWS (3)
 -- ============================================================
 -- a) lecturer workload summary with utilization %
+-- Limits resolve from workload_rules: ROLE rule (PL) wins, otherwise the
+-- COURSES rule matching the programme levels taught.
 CREATE VIEW vw_lecturer_workload_summary AS
+WITH taught_levels AS (
+    SELECT w.lecturer_id,
+           array_agg(DISTINCT UPPER(p.level)) AS levels
+    FROM workloads w
+    JOIN workload_details wd ON wd.workload_id = w.id
+    JOIN subjects s          ON s.id = wd.subject_id
+    JOIN programmes p        ON p.id = s.programme_id
+    WHERE p.level IS NOT NULL
+    GROUP BY w.lecturer_id
+),
+resolved AS (
+    SELECT l.id AS lecturer_id,
+           CASE
+             WHEN l.is_pl THEN 'PL'
+             WHEN 'BACHELOR' = ANY(t.levels) AND 'DIPLOMA' = ANY(t.levels) THEN 'BOTH'
+             WHEN 'BACHELOR' = ANY(t.levels) THEN 'BACHELOR_ONLY'
+             WHEN 'DIPLOMA'  = ANY(t.levels) THEN 'DIPLOMA_ONLY'
+             ELSE 'DEFAULT'
+           END AS rule_key
+    FROM lecturers l
+    LEFT JOIN taught_levels t ON t.lecturer_id = l.id
+)
 SELECT
     l.id  AS lecturer_id,
     l.staff_id,
     l.full_name,
     l.employment_type,
-    l.max_workload_hours,
+    r.rule_key,
+    rr.label              AS rule_label,
+    r.min_hours           AS rule_min_hours,
+    r.max_hours           AS rule_max_hours,
+    l.min_limit_hours     AS min_workload_hours,
+    l.max_limit_hours     AS max_workload_hours,
     d.department_code,
     d.department_name,
     ay.year_code,
@@ -188,8 +248,10 @@ SELECT
     w.id  AS workload_id,
     w.total_allocated_hours,
     w.status,
-    ROUND((w.total_allocated_hours / NULLIF(l.max_workload_hours,0)) * 100, 2) AS utilization_pct
+    ROUND((w.total_allocated_hours / NULLIF(l.max_limit_hours,0)) * 100, 2) AS utilization_pct
 FROM lecturers l
+JOIN resolved         r  ON r.lecturer_id = l.id
+JOIN workload_rules   rr ON rr.rule_key = r.rule_key
 LEFT JOIN departments   d  ON d.id = l.department_id
 LEFT JOIN workloads     w  ON w.lecturer_id = l.id
 LEFT JOIN semesters     s  ON s.id = w.semester_id

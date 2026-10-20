@@ -1,16 +1,1437 @@
 "use client";
 
-import ModulePlaceholder from "@/components/layout/ModulePlaceholder";
-import { Users } from "lucide-react";
+/**
+ * LECTURERS — Programme Leader staff directory (UC_CPM_01).
+ *
+ * Displays every lecturer from PostgreSQL (GET /api/lecturers): staff ID,
+ * name, position, contact, employment classification, department, linked
+ * account and a live semester-workload roll-up. Hour limits are derived —
+ * NOT stored per lecturer — by resolving the editable workload_rules table
+ * against each lecturer's role (Programme Leader wins) and the programme
+ * levels actually taught (Bachelor only / Diploma only / both). The
+ * hour-limit rules card below the roster edits those min/max pairs live.
+ *
+ * Doc basis: RBAC gives PLs read access to workload data for all staff in
+ * their department. Each row carries an Edit action (UC_CPM_01 "maintain
+ * lecturer details") which opens a themed dialog and patches the record
+ * via PATCH /api/lecturers/:staffId (hour limits are edited via the rules
+ * card, PATCH /api/workload-rules).
+ */
 
-/** Lecturer classification management (UC_CPM_01). */
-export default function LecturersPage() {
+import { Children, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowDownUp, Check, ChevronDown, Loader2, Pencil, RefreshCcw, Save, Search, TriangleAlert, Users, X, type LucideIcon } from "lucide-react";
+import Toast from "@/components/toast/Toast";
+
+interface LecturerRow {
+  id: number;
+  staffId: string;
+  fullName: string;
+  email: string | null;
+  phone: string | null;
+  position: string | null;
+  isPl: boolean;
+  employmentType: "FULL_TIME" | "PART_TIME" | "CONTRACT";
+  isActive: boolean;
+  /** limits: the lecturer's stored pair (snapshot-stable — rules edits
+      never rewrite it) plus the rule's current suggestion for comparison */
+  ruleKey: string;
+  ruleLabel: string;
+  ruleBasis: "ROLE" | "COURSES" | "GLOBAL";
+  minHours: number;
+  maxHours: number;
+  suggestedMin: number;
+  suggestedMax: number;
+  /** stored pair differs from the current rule (informational chip) */
+  custom: boolean;
+  /** stored pair violates the rule's allowed min–max range (⚠ badge) */
+  outOfRange: boolean;
+  departmentCode: string | null;
+  departmentName: string | null;
+  username: string | null;
+  semesterRecords: number;
+  allocatedHours: number;
+}
+
+interface LecturerCounts {
+  total: number;
+  fullTime: number;
+  partTime: number;
+  contract: number;
+  programmeLeaders: number;
+}
+
+/** one editable min/max pair from workload_rules (role- or course-based) */
+interface WorkloadRule {
+  ruleKey: string;
+  label: string;
+  basis: "ROLE" | "COURSES" | "GLOBAL";
+  priority: number;
+  minHours: number;
+  maxHours: number;
+}
+
+type TypeFilter = "all" | "FULL_TIME" | "PART_TIME" | "PL";
+
+type SortKey =
+  | "staff_asc"
+  | "staff_desc"
+  | "name_asc"
+  | "name_desc"
+  | "class_name"
+  | "hours_desc";
+
+/** comparators for every sort mode */
+const SORTERS: Record<SortKey, (a: LecturerRow, b: LecturerRow) => number> = {
+  staff_asc: (a, b) => a.staffId.localeCompare(b.staffId),
+  staff_desc: (a, b) => b.staffId.localeCompare(a.staffId),
+  name_asc: (a, b) => a.fullName.localeCompare(b.fullName),
+  name_desc: (a, b) => b.fullName.localeCompare(a.fullName),
+  /* Programme Leaders first, then full-time, then part-time; names inside */
+  class_name: (a, b) => {
+    const rank = (l: LecturerRow) =>
+      l.isPl ? 0 : l.employmentType === "FULL_TIME" ? 1 : 2;
+    return rank(a) - rank(b) || a.fullName.localeCompare(b.fullName);
+  },
+  hours_desc: (a, b) =>
+    b.maxHours - a.maxHours || b.minHours - a.minHours || a.staffId.localeCompare(b.staffId),
+};
+
+const EMPLOYMENT_LABEL: Record<LecturerRow["employmentType"], string> = {
+  FULL_TIME: "Full-time",
+  PART_TIME: "Part-time",
+  CONTRACT: "Contract",
+};
+
+const EMPLOYMENT_CLS: Record<LecturerRow["employmentType"], string> = {
+  FULL_TIME: "bg-successBg text-successText",
+  PART_TIME: "bg-warningBg text-warningText",
+  CONTRACT: "bg-hoverBg text-textNormal",
+};
+
+/**
+ * Themed filter dropdown — custom menu surface in the docx palette
+ * (native <select> pop-ups can't adopt the white card / hover / primary
+ * active states). Same call API as before: options are still declared with
+ * <option value="…">Label</option> children.
+ */
+function FilterSelect({
+  ariaLabel,
+  value,
+  onChange,
+  icon: Icon,
+  children,
+}: {
+  ariaLabel: string;
+  value: string;
+  onChange: (v: string) => void;
+  /** optional leading icon (e.g. the arrows on the sort selector) */
+  icon?: LucideIcon;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  /* flatten the <option> children into {value,label} menu entries */
+  const options = Children.toArray(children)
+    .filter(isValidElement)
+    .map((el) => {
+      const props = el.props as { value?: unknown; children?: ReactNode };
+      return {
+        value: String(props.value ?? ""),
+        label: String(props.children ?? props.value ?? ""),
+      };
+    });
+  const selected = options.find((o) => o.value === value) ?? options[0];
+
+  /* close on outside click or Escape */
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
-    <ModulePlaceholder
-      title="Lecturers"
-      module="Course and Programme Management"
-      description="Maintain lecturer records and classifications: department, programme leadership status, employment type (full-time / part-time / contract) and qualification levels, which drive the differentiated hour limits used by the workload engine."
-      icon={Users}
-    />
+    <div ref={rootRef} className="relative">
+      {/* trigger button — shows the selected label, chevron spins when open */}
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => setOpen((o) => !o)}
+        className={`relative flex h-9 w-full items-center gap-xs whitespace-nowrap rounded-button border bg-surface pr-8 text-[13px] font-medium text-textNormal outline-none transition-colors sm:w-auto ${
+          open ? "border-primary" : "border-divider hover:bg-background"
+        } ${Icon ? "pl-8" : "pl-md"}`}
+      >
+        {Icon && <Icon size={14} className="shrink-0 text-textSecondary" />}
+        {selected?.label ?? "—"}
+        <span
+          className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-textSecondary transition-transform duration-200 ${
+            open ? "rotate-180" : ""
+          }`}
+        >
+          <ChevronDown size={14} />
+        </span>
+      </button>
+
+      {/* palette-themed menu panel */}
+      {open && (
+        <div
+          role="listbox"
+          aria-label={ariaLabel}
+          className="animate-[menuIn_0.18s_ease-out_both] absolute left-0 top-full z-30 mt-xs w-max min-w-full origin-top-left overflow-hidden rounded-card border border-divider bg-surface py-xs shadow-card"
+        >
+          {options.map((o) => {
+            const active = o.value === value;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="option"
+                aria-selected={active}
+                title={o.label}
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+                className={`flex h-9 w-full items-center gap-sm whitespace-nowrap px-md text-left text-[13px] transition-colors ${
+                  active
+                    ? "bg-primaryLight font-semibold text-primary"
+                    : "font-medium text-textNormal hover:bg-hoverBg"
+                }`}
+              >
+                {o.label}
+                {active && <Check size={14} className="ml-auto shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterChip({
+  label,
+  count,
+  active,
+  onClick,
+  tone = "default",
+}: {
+  /** string or short JSX (e.g. icon + text) */
+  label: ReactNode;
+  count: number | null;
+  active: boolean;
+  onClick: () => void;
+  /** error-tone chips (the ⚠ warnings filter) highlight in red when active */
+  tone?: "default" | "error";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex h-9 items-center gap-xs whitespace-nowrap rounded-badge px-md text-[12.5px] transition-colors ${
+        active
+          ? tone === "error"
+            ? "bg-errorBg font-semibold text-errorText"
+            : "bg-primaryLight font-semibold text-primary"
+          : "border border-divider bg-surface font-medium text-textNormal hover:bg-hoverBg"
+      }`}
+    >
+      {label}
+      {count !== null && (
+        <span
+          className={
+            active
+              ? tone === "error"
+                ? "text-errorText/70"
+                : "text-primary/70"
+              : "text-textSecondary"
+          }
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** "12" not "12.00" for rule copy */
+const hoursLabel = (v: number) => `${Number(v.toFixed(2))}`;
+
+const BASIS_LABEL: Record<WorkloadRule["basis"], string> = {
+  ROLE: "Role",
+  COURSES: "From courses",
+  GLOBAL: "Fallback",
+};
+
+const BASIS_CLS: Record<WorkloadRule["basis"], string> = {
+  ROLE: "bg-primaryLight text-primary",
+  COURSES: "bg-background text-textNormal",
+  GLOBAL: "bg-hoverBg text-textSecondary",
+};
+
+/**
+ * HOUR-LIMIT RULES EDITOR — the editable workload_rules table.
+ *
+ * Limits are NOT per lecturer: each lecturer resolves a rule in priority
+ * order (Programme Leader ROLE rule first; otherwise the COURSES rule for
+ * the programme levels taught — Bachelor only / Diploma only / both;
+ * DEFAULT when nothing matches). Each rule carries an editable min/max
+ * pair; saving PATCHes /api/workload-rules and the parent refetches so the
+ * roster re-resolves and replays its row animation.
+ */
+function RulesEditor({
+  rules,
+  staffCountByRule,
+  onSaved,
+}: {
+  rules: WorkloadRule[];
+  staffCountByRule: Record<string, number>;
+  onSaved: () => void;
+}) {
+  /** server copy rebuilt whenever new values arrive (also resets drafts) */
+  const serverDrafts = useMemo(
+    () =>
+      Object.fromEntries(
+        rules.map((r) => [r.ruleKey, { min: hoursLabel(r.minHours), max: hoursLabel(r.maxHours) }])
+      ) as Record<string, { min: string; max: string }>,
+    [rules]
+  );
+
+  const [drafts, setDrafts] = useState(serverDrafts);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDrafts(serverDrafts);
+  }, [serverDrafts]);
+
+  /** parse + validate one row draft (policy: 0.5–45 h/wk, min ≤ max) */
+  const rowState = (rule: WorkloadRule) => {
+    const d = drafts[rule.ruleKey] ?? { min: "", max: "" };
+    const min = Number(d.min);
+    const max = Number(d.max);
+    const valid =
+      Number.isFinite(min) &&
+      Number.isFinite(max) &&
+      min >= LIMIT_MIN &&
+      max >= LIMIT_MIN &&
+      min <= LIMIT_MAX &&
+      max <= LIMIT_MAX &&
+      min <= max;
+    const changed = min !== rule.minHours || max !== rule.maxHours;
+    return { min, max, valid, changed };
+  };
+
+  const anyInvalid = rules.some((r) => !rowState(r).valid);
+  const anyChanged = rules.some((r) => rowState(r).changed);
+
+  const save = async () => {
+    if (!anyChanged || anyInvalid) return;
+    setError(null);
+    setSaving(true);
+    try {
+      const r = await fetch("/api/workload-rules", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          updates: rules.map((rule) => {
+            const s = rowState(rule);
+            return { ruleKey: rule.ruleKey, minHours: s.min, maxHours: s.max };
+          }),
+        }),
+      });
+      const d = (await r.json()) as { ok: boolean; message?: string };
+      if (d.ok) onSaved();
+      else setError(d.message ?? "Could not save the rules.");
+    } catch {
+      setError("Network error while saving the rules.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputCls = (bad: boolean) =>
+    `h-10 w-[92px] rounded-button border bg-background px-sm text-center text-[13px] text-text outline-none transition-colors disabled:cursor-not-allowed ${
+      bad
+        ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+        : "border-divider focus:border-primary focus:bg-surface focus:ring-4 focus:ring-primaryLight"
+    }`;
+
+  const setDraft = (ruleKey: string, part: "min" | "max", value: string) =>
+    setDrafts((prev) => ({ ...prev, [ruleKey]: { ...prev[ruleKey], [part]: value } }));
+
+  return (
+    <section className="mt-lg overflow-hidden rounded-card bg-surface shadow-card">
+      {/* header */}
+      <div className="flex flex-wrap items-end justify-between gap-sm border-b border-divider px-lg py-md">
+        <div>
+          <h2 className="text-[15px] font-bold leading-[22px] text-text">Hour-limit rules</h2>
+          <p className="mt-[2px] text-[12px] text-textSecondary">
+            Minimum and maximum teaching hours per role / courses taught — Programme Leader
+            resolves first, then the programme levels actually taught. Numbers only,
+            0.5–45 h/wk per rule — two decimals like .00. Policy only: lecturer limits
+            keep their snapshot, flagged rows show ⚠ until updated.
+          </p>
+        </div>
+      </div>
+
+      {rules.length === 0 ? (
+        <p className="px-lg py-md text-[13px] text-textSecondary">Rules load with the roster…</p>
+      ) : (
+        <div>
+          {rules.map((rule) => {
+            const d = drafts[rule.ruleKey] ?? { min: "", max: "" };
+            const s = rowState(rule);
+            const badMin = badHours(s.min);
+            const badMax = badHours(s.max);
+            const rangeBad = !badMin && !badMax && s.min > s.max;
+            return (
+              <div
+                key={rule.ruleKey}
+                className="grid grid-cols-[minmax(200px,1fr)_auto_auto] items-center gap-x-md gap-y-1 border-b border-divider px-lg py-sm last:border-b-0"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-sm">
+                    <p className="text-[13.5px] font-semibold text-text">{rule.label}</p>
+                    <span
+                      className={`rounded-badge px-sm py-[3px] text-[11px] font-semibold ${BASIS_CLS[rule.basis]}`}
+                    >
+                      {BASIS_LABEL[rule.basis]}
+                    </span>
+                  </div>
+                  <p className="mt-[2px] whitespace-nowrap text-[11.5px] text-textSecondary">
+                    {staffCountByRule[rule.ruleKey] ?? 0} staff currently resolve here
+                    {rule.ruleKey === "PL" && " · wins over course rules"}
+                    {rule.ruleKey === "DEFAULT" && " · when role and courses match nothing"}
+                  </p>
+                </div>
+
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-textSecondary">
+                    Min h/wk
+                  </span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={99}
+                    step={0.5}
+                    value={d.min}
+                    onChange={(e) => setDraft(rule.ruleKey, "min", sanitizeHours(e.target.value))}
+                    className={inputCls(badMin || rangeBad)}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-textSecondary">
+                    Max h/wk
+                  </span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={99}
+                    step={0.5}
+                    value={d.max}
+                    onChange={(e) => setDraft(rule.ruleKey, "max", sanitizeHours(e.target.value))}
+                    className={inputCls(badMax || rangeBad)}
+                  />
+                </label>
+
+                {(badMin || badMax || rangeBad) && (
+                  <p className="col-span-2 col-start-2 animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                    {badMin || badMax
+                      ? !Number.isFinite(s.min) || !Number.isFinite(s.max)
+                        ? "Numbers only — 0.5–45 h/wk, two decimals max."
+                        : "Weekly hours: 0.5–45 h/wk (two decimals like .00)."
+                      : "Minimum cannot exceed maximum."}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* footer: status + actions */}
+      <div className="flex flex-wrap items-center justify-between gap-sm border-t border-divider px-lg py-md">
+        <p className="text-[12px] text-textSecondary">
+          {error ? (
+            <span className="font-medium text-errorText">{error}</span>
+          ) : anyInvalid ? (
+            "Fix the highlighted rows before saving."
+          ) : anyChanged ? (
+            "Unsaved changes — flagged lecturers keep their snapshot until re-synced."
+          ) : (
+            "Saved values live. Lecturer limits are snapshots — rules changes flag affected lecturers (⚠) instead of rewriting their limits."
+          )}
+        </p>
+        <div className="flex items-center gap-sm">
+          {anyChanged && (
+            <button
+              type="button"
+              onClick={() => setDrafts(serverDrafts)}
+              disabled={saving}
+              className="flex h-10 items-center rounded-button border border-divider bg-surface px-md text-[13px] font-medium text-textNormal transition-colors hover:bg-hoverBg disabled:opacity-50"
+            >
+              Reset
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={save}
+            disabled={!anyChanged || anyInvalid || saving}
+            className="flex h-10 items-center gap-xs rounded-button bg-primary px-lg text-[13px] font-medium text-white transition-colors hover:bg-primaryHover disabled:opacity-50"
+            title={anyChanged ? "Save rule limits" : "No changes to save"}
+          >
+            {saving ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Save size={14} />
+            )}
+            {saving ? "Saving…" : "Save rules"}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WorkloadCell({
+  lecturer,
+  limitCeiling,
+  onExceedToast,
+}: {
+  lecturer: LecturerRow;
+  /** largest max in the Hour-limit rules — row limits above it are flagged */
+  limitCeiling: number;
+  /** raises the page-level exceed toast (badge hover and click) */
+  onExceedToast: (message: string) => void;
+}) {
+  const allocated = lecturer.allocatedHours;
+  const pct = Math.min((allocated / Math.max(lecturer.maxHours, 0.1)) * 100, 100);
+  const belowMin = allocated < lecturer.minHours;
+  const barCls =
+    allocated > lecturer.maxHours
+      ? "bg-error"
+      : belowMin || pct >= 85
+        ? "bg-warning"
+        : "bg-success";
+
+  /** ⚠ shows only when the stored pair falls outside the rule's allowed
+      min–max range — a kept/custom limit within the range is fine */
+  const overCeiling = lecturer.minHours > limitCeiling || lecturer.maxHours > limitCeiling;
+  const outOfRange = lecturer.outOfRange;
+  const exceedMessage = overCeiling
+    ? `${lecturer.staffId} — ${hoursLabel(lecturer.maxHours > limitCeiling ? lecturer.maxHours : lecturer.minHours)}h exceeds the ${limitCeiling}h maximum set in the Hour-limit rules — lower the lecturer's custom limit or raise the rule maximum.`
+    : `${lecturer.staffId} — ${lecturer.minHours}–${lecturer.maxHours}h is outside rule "${lecturer.ruleLabel}" allowed range (${lecturer.suggestedMin}–${lecturer.suggestedMax}h) — snap to the rule values or set a limit within the range.`;
+
+  const overBadge = outOfRange ? (
+    <button
+      type="button"
+      onClick={() => onExceedToast(exceedMessage)}
+      onMouseEnter={() => onExceedToast(exceedMessage)}
+      title={exceedMessage}
+      aria-label={`Warning: ${exceedMessage}`}
+      className="animate-[badgeIn_0.2s_ease-out_both] flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-badge bg-errorBg text-errorText transition-colors hover:bg-error/15"
+    >
+      <TriangleAlert size={12} />
+    </button>
+  ) : null;
+
+  return (
+    <div className="flex w-[168px] flex-col justify-center gap-1">
+      {allocated > 0 ? (
+        <>
+          <div className="flex items-center gap-xs">
+            <p className="whitespace-nowrap text-[12.5px] font-medium text-text">
+              {allocated}h / {lecturer.minHours}–{lecturer.maxHours}h
+            </p>
+            {lecturer.custom && <CustomLimitChip />}
+            {overBadge}
+          </div>
+          <span className="h-1.5 w-full overflow-hidden rounded-badge bg-hoverBg">
+            <span
+              className={`block h-full ${barCls} rounded-badge transition-all`}
+              style={{ width: `${pct}%` }}
+            />
+          </span>
+          {belowMin && (
+            <p className="whitespace-nowrap text-[11px] font-medium text-warningText">
+              Below {lecturer.minHours}h minimum
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-xs">
+            <p className="whitespace-nowrap text-[12.5px] font-medium text-text">
+              {lecturer.minHours}–{lecturer.maxHours}h / wk
+            </p>
+            {lecturer.custom && <CustomLimitChip />}
+            {overBadge}
+          </div>
+          <p className="text-[11.5px] text-textSecondary">No semester workload yet</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** marks limits set per lecturer rather than resolved from the rules */
+function CustomLimitChip() {
+  return (
+    <span className="rounded-badge bg-primaryLight px-sm py-[2px] text-[10.5px] font-semibold text-primary">
+      Custom
+    </span>
+  );
+}
+
+function StatusDot({ lecturer }: { lecturer: LecturerRow }) {
+  return (
+    <div className="flex w-[84px] items-center gap-xs">
+      <span
+        className={`h-2 w-2 shrink-0 rounded-badge ${
+          lecturer.isActive ? "bg-success" : "bg-textDisabled"
+        }`}
+      />
+      <span
+        className={`text-[12px] font-medium ${
+          lecturer.isActive ? "text-textNormal" : "text-textSecondary"
+        }`}
+      >
+        {lecturer.isActive ? "Active" : "Inactive"}
+      </span>
+    </div>
+  );
+}
+
+/** labelled 44px form input wrapper for the dialog grid */
+function Field({
+  label,
+  wide,
+  children,
+}: {
+  label: string;
+  /** span both grid columns */
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <label className={`flex flex-col gap-1 ${wide ? "sm:col-span-2" : ""}`}>
+      <span className="text-[12px] font-semibold text-textNormal">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/** shared input styling for the dialog (theme: 44px, primary focus ring) */
+const INPUT_CLS =
+  "h-11 w-full rounded-button border border-divider bg-background px-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:bg-surface focus:ring-4 focus:ring-primaryLight disabled:cursor-not-allowed disabled:bg-hoverBg disabled:text-textSecondary";
+
+/** weekly-hour policy (h/wk): fractional halves allowed, hard cap 45 */
+const LIMIT_MIN = 0.5;
+const LIMIT_MAX = 45;
+
+/** digits + at most ONE decimal point with TWO decimal places — a valid
+    double h/wk entry (12 · 12.5 · 12.45 ✓ · 12.345 ✗); letters never land */
+const sanitizeHours = (raw: string) => {
+  const cleaned = raw.replace(/[^0-9.]/g, "");
+  const dot = cleaned.indexOf(".");
+  if (dot === -1) return cleaned;
+  return `${cleaned.slice(0, dot + 1)}${cleaned
+    .slice(dot + 1)
+    .replace(/\./g, "")
+    .slice(0, 2)}`;
+};
+
+/** standalone precision probe (12.345 ✗ · 12.50 ✓) — loops reuse badHours,
+    which already embeds this check */
+const tooPrecise = (v: number) =>
+  Number.isFinite(v) && Math.abs(v * 100 - Math.round(v * 100)) > 1e-6;
+
+/** true when a parsed weekly-hour value is unusable: outside the 0.5–45
+    bounds, or carrying more than two decimal places (12.345 …) */
+const badHours = (v: number) =>
+  !Number.isFinite(v) ||
+  v < LIMIT_MIN ||
+  v > LIMIT_MAX ||
+  Math.abs(v * 100 - Math.round(v * 100)) > 1e-6;
+
+/**
+ * Edit dialog for a lecturer record (UC_CPM_01 "maintain lecturer details").
+ * Patches PATCH /api/lecturers/:staffId with the editable subset — identity,
+ * contact, position and classification flags — plus the lecturer's stored
+ * workload-limit pair (min/max). Limits are snapshot-stable: rules edits
+ * never rewrite them, so per-record value changes only happen here. On save
+ * the page refetches and replays the row animation.
+ */
+function EditLecturerDialog({
+  lecturer,
+  ceiling,
+  onExceed,
+  onClose,
+  onSaved,
+}: {
+  lecturer: LecturerRow;
+  /** hard maximum (h/wk) from the Hour-limit rules — overrides may not exceed it */
+  ceiling: number;
+  /** raises/clears the page-level exceed toast */
+  onExceed: (message: string | null) => void;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [fullName, setFullName] = useState(lecturer.fullName);
+  const [email, setEmail] = useState(lecturer.email ?? "");
+  const [phone, setPhone] = useState(lecturer.phone ?? "");
+  const [position, setPosition] = useState(lecturer.position ?? "");
+  const [employmentType, setEmploymentType] = useState<LecturerRow["employmentType"]>(
+    lecturer.employmentType
+  );
+  const [isPl, setIsPl] = useState(lecturer.isPl);
+  const [isActive, setIsActive] = useState(lecturer.isActive);
+  /* workload limit pair — stored per lecturer and snapshot-stable; rules
+     edits never rewrite it, so the dialog always consumes/produces values */
+  const [minLimit, setMinLimit] = useState(hoursLabel(lecturer.minHours));
+  const [maxLimit, setMaxLimit] = useState(hoursLabel(lecturer.maxHours));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /* Escape closes while the dialog is open */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  /* ceiling guard — while either editable limit exceeds the rules maximum,
+     raise the page toast (debounced against keystrokes) and block Save */
+  const mnLimit = Number(minLimit);
+  const mxLimit = Number(maxLimit);
+  const minExceeded = Number.isFinite(mnLimit) && mnLimit > ceiling;
+  const maxExceeded = Number.isFinite(mxLimit) && mxLimit > ceiling;
+  const limitBlocked = minExceeded || maxExceeded;
+  const exceededValue = minExceeded ? mnLimit : mxLimit;
+  /** 0.5–45 policy bounds + pairing — drives the red borders on the inputs */
+  const pairBad =
+    Number.isFinite(mnLimit) && Number.isFinite(mxLimit) && mnLimit > mxLimit;
+  const minLimitBad = badHours(mnLimit) || pairBad;
+  const maxLimitBad = badHours(mxLimit) || pairBad;
+  /** bounds status of the currently edited pair vs the rule's range */
+  const dialogOutOfRange =
+    (Number.isFinite(mnLimit) &&
+      (mnLimit < lecturer.suggestedMin || mnLimit > lecturer.suggestedMax)) ||
+    (Number.isFinite(mxLimit) &&
+      (mxLimit < lecturer.suggestedMin || mxLimit > lecturer.suggestedMax));
+
+  useEffect(() => {
+    if (!limitBlocked) {
+      onExceed(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      onExceed(
+        `${exceededValue}h exceeds the ${ceiling}h maximum allowed by the Hour-limit rules — lower it to save changes.`
+      );
+    }, 400);
+    return () => clearTimeout(t);
+  }, [limitBlocked, exceededValue, ceiling, onExceed]);
+
+  const save = async () => {
+    setError(null);
+    if (limitBlocked) {
+      setError(
+        `Cannot save — ${exceededValue}h exceeds the ${ceiling}h maximum set in the Hour-limit rules.`
+      );
+      return;
+    }
+    if (!fullName.trim()) {
+      setError("Full name is required.");
+      return;
+    }
+    /* validate + send the stored limit pair (0.5–45 h/wk policy bounds) */
+    const mn = Number(minLimit);
+    const mx = Number(maxLimit);
+    if (badHours(mn) || badHours(mx)) {
+      setError("Hour limits: 0.5–45 h/wk, numbers only, two decimals max.");
+      return;
+    }
+    if (mn > mx) {
+      setError("Minimum limit cannot exceed maximum limit.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await fetch(`/api/lecturers/${lecturer.staffId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          position: position.trim(),
+          employmentType,
+          isPl,
+          isActive,
+          overrideMin: Math.round(mn * 100) / 100,
+          overrideMax: Math.round(mx * 100) / 100,
+        }),
+      });
+      const d = (await r.json()) as { ok: boolean; message?: string };
+      if (d.ok) onSaved();
+      else setError(d.message ?? "Could not save the lecturer.");
+    } catch {
+      setError("Network error while saving the lecturer.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleChip = (on: boolean) =>
+    `flex h-9 items-center gap-xs rounded-badge px-md text-[12.5px] transition-colors ${
+      on
+        ? "bg-primaryLight font-semibold text-primary"
+        : "border border-divider bg-surface font-medium text-textNormal hover:bg-hoverBg"
+    }`;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="animate-[menuIn_0.2s_ease-out_both] max-h-[calc(100vh-64px)] w-full max-w-[560px] overflow-y-auto rounded-card border border-divider bg-surface p-lg shadow-card">
+        {/* title bar */}
+        <div className="flex items-start justify-between gap-md">
+          <div>
+            <h2 className="text-[18px] font-bold leading-[26px] text-text">Edit lecturer</h2>
+            <p className="mt-[2px] text-[12.5px] text-textSecondary">
+              Maintain the staff record — changes apply immediately on save.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-button text-textSecondary transition-colors hover:bg-hoverBg hover:text-text"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* fields */}
+        <div className="mt-lg grid grid-cols-1 gap-md sm:grid-cols-2">
+          <Field label="Staff ID" wide>
+            <input value={lecturer.staffId} readOnly disabled className={INPUT_CLS} />
+          </Field>
+          <Field label="Full name" wide>
+            <input
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className={INPUT_CLS}
+            />
+          </Field>
+          <Field label="Email">
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@tarc.edu.my"
+              className={INPUT_CLS}
+            />
+          </Field>
+          <Field label="Phone">
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="e.g. 012-3456789"
+              className={INPUT_CLS}
+            />
+          </Field>
+          <Field label="Position" wide>
+            <input
+              type="text"
+              value={position}
+              onChange={(e) => setPosition(e.target.value)}
+              placeholder="e.g. Senior Lecturer"
+              className={INPUT_CLS}
+            />
+          </Field>
+
+          {/* classification — single choice (drives the hour-limit engine) */}
+          <Field label="Classification" wide>
+            <div className="flex flex-wrap gap-sm">
+              {(["FULL_TIME", "PART_TIME", "CONTRACT"] as const).map((t) => {
+                const on = employmentType === t;
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setEmploymentType(t)}
+                    className={toggleChip(on)}
+                  >
+                    {on && <Check size={13} />}
+                    {EMPLOYMENT_LABEL[t]}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+
+          {/* role / status toggles */}
+          <Field label="Role & status" wide>
+            <div className="flex flex-wrap gap-sm">
+              <button type="button" onClick={() => setIsPl((v) => !v)} className={toggleChip(isPl)}>
+                {isPl && <Check size={13} />}
+                Programme Leader · {isPl ? "on" : "off"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsActive((v) => !v)}
+                className={toggleChip(isActive)}
+              >
+                {isActive && <Check size={13} />}
+                Status · {isActive ? "active" : "inactive"}
+              </button>
+            </div>
+          </Field>
+
+          {/* workload limit — stored per lecturer, snapshot-stable; the
+              rule's current suggestion is one click away */}
+          <Field label="Workload limit (min & max h/wk)" wide>
+            <div className="flex flex-col gap-sm">
+              {/* one row: min + max inputs and the rule-snap action share it */}
+              <div className="flex flex-nowrap items-end gap-sm">
+                <label className="flex w-[104px] shrink-0 flex-col gap-1">
+                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-textSecondary">
+                    Min h/wk
+                  </span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={99}
+                    step={0.5}
+                    value={minLimit}
+                    onChange={(e) => setMinLimit(sanitizeHours(e.target.value))}
+                    className={`${INPUT_CLS} ${
+                      minExceeded || minLimitBad
+                        ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                        : ""
+                    }`}
+                  />
+                </label>
+                <label className="flex w-[104px] shrink-0 flex-col gap-1">
+                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-textSecondary">
+                    Max h/wk
+                  </span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={99}
+                    step={0.5}
+                    value={maxLimit}
+                    onChange={(e) => setMaxLimit(sanitizeHours(e.target.value))}
+                    className={`${INPUT_CLS} ${
+                      maxExceeded || maxLimitBad
+                        ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                        : ""
+                    }`}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMinLimit(hoursLabel(lecturer.suggestedMin));
+                    setMaxLimit(hoursLabel(lecturer.suggestedMax));
+                  }}
+                  title={`Snap the stored pair to the current "${lecturer.ruleLabel}" rule values`}
+                  className="ml-auto flex h-11 shrink-0 items-center gap-xs rounded-button bg-success px-md text-[12.5px] font-medium text-white transition-colors hover:bg-successHover"
+                >
+                  <RefreshCcw size={13} />
+                  Set to rule ({hoursLabel(lecturer.suggestedMin)}–
+                  {hoursLabel(lecturer.suggestedMax)}h)
+                </button>
+              </div>
+              <p className="max-w-[360px] text-[11.5px] leading-snug text-textSecondary">
+                {`Stored for "${lecturer.ruleLabel}" at ${lecturer.minHours}–${lecturer.maxHours}h — `}
+                {dialogOutOfRange
+                  ? `outside the rule's allowed range (${lecturer.suggestedMin}–${lecturer.suggestedMax}h), so the roster shows the ⚠ warning.`
+                  : `matches the rule's allowed range (${lecturer.suggestedMin}–${lecturer.suggestedMax}h), so no ⚠ shows${lecturer.custom ? " even though the pair differs from the rule's exact values." : "."}`}{" "}
+                Rules card edits never rewrite these values; saving here re-syncs
+                the row.
+                <span className="mt-1 block font-medium text-textNormal">
+                  Numbers only — 0.5–45 h/wk, two decimals like .00; beyond the {ceiling}h
+                  rules ceiling blocks saving.
+                </span>
+              </p>
+            </div>
+          </Field>
+        </div>
+
+        {/* inline error */}
+        {error && (
+          <p className="mt-md rounded-button bg-errorBg px-md py-sm text-[12.5px] font-medium text-errorText">
+            {error}
+          </p>
+        )}
+
+        {/* footer actions */}
+        <div className="mt-lg flex items-center justify-end gap-sm border-t border-divider pt-lg">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="flex h-10 items-center rounded-button border border-divider bg-surface px-lg text-[13px] font-medium text-textNormal transition-colors hover:bg-hoverBg disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving || limitBlocked}
+            title={
+              limitBlocked
+                ? `Blocked — limit exceeds the ${ceiling}h maximum from the Hour-limit rules`
+                : undefined
+            }
+            className="flex h-10 items-center gap-xs rounded-button bg-primary px-lg text-[13px] font-medium text-white transition-colors hover:bg-primaryHover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving && <Loader2 size={14} className="animate-spin" />}
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function LecturersPage() {
+  const [lecturers, setLecturers] = useState<LecturerRow[]>([]);
+  const [counts, setCounts] = useState<LecturerCounts | null>(null);
+  const [department, setDepartment] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [departmentFilter, setDepartmentFilter] = useState<string>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("staff_asc");
+  /** lecturer currently opened in the edit dialog (null = closed) */
+  const [editing, setEditing] = useState<LecturerRow | null>(null);
+  /** bumped after each successful save — refetches + replays the row glide-in */
+  const [reloadTick, setReloadTick] = useState(0);
+  /** ⚠ filter: show only lecturers whose saved limit broke the rule bounds */
+  const [warningsOnly, setWarningsOnly] = useState(false);
+  /** editable role/course hour-limit rules (workload_rules) */
+  const [rules, setRules] = useState<WorkloadRule[]>([]);
+  /** toast for limit-exceeded warnings raised by the edit dialog */
+  const [limitToast, setLimitToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/lecturers")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.ok) {
+          setLecturers(d.lecturers as LecturerRow[]);
+          setCounts(d.counts as LecturerCounts);
+          setDepartment(d.department ?? null);
+          if (Array.isArray(d.rules)) setRules(d.rules as WorkloadRule[]);
+        } else {
+          setError(d.message ?? "Lecturer directory unavailable.");
+        }
+      })
+      .catch(() => setError("Lecturer directory unavailable (network error)."));
+  }, [reloadTick]);
+
+  /* live filter: classification chip + status + department + free-text search
+     (+ the ⚠ warnings-only toggle) */
+  const matched = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return lecturers.filter((l) => {
+      /* ⚠ filter — keep only the rows showing the red warning badge */
+      if (warningsOnly && !l.outOfRange) return false;
+
+      const typeOk =
+        typeFilter === "all"
+          ? true
+          : typeFilter === "PL"
+            ? l.isPl
+            : l.employmentType === typeFilter;
+      if (!typeOk) return false;
+
+      const statusOk =
+        statusFilter === "all"
+          ? true
+          : statusFilter === "active"
+            ? l.isActive
+            : !l.isActive;
+      if (!statusOk) return false;
+
+      if (departmentFilter !== "all" && l.departmentCode !== departmentFilter) return false;
+
+      if (!q) return true;
+      return (
+        l.fullName.toLowerCase().includes(q) ||
+        l.staffId.toLowerCase().includes(q) ||
+        (l.email ?? "").toLowerCase().includes(q) ||
+        (l.position ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [lecturers, query, typeFilter, statusFilter, departmentFilter, warningsOnly]);
+
+  /* sorted view for the selected mode */
+  const sorted = useMemo(() => [...matched].sort(SORTERS[sortKey]), [matched, sortKey]);
+
+  /* unique departments in the roster — the dropdown appears only with >1 */
+  const departments = useMemo(() => {
+    const map = new Map<string, string>();
+    lecturers.forEach((l) => {
+      if (l.departmentCode) map.set(l.departmentCode, l.departmentName ?? l.departmentCode);
+    });
+    return Array.from(map.entries()).map(([code, name]) => ({ code, name }));
+  }, [lecturers]);
+
+  /* how many staff currently resolve to each hour-limit rule */
+  const staffCountByRule = useMemo(() => {
+    const map: Record<string, number> = {};
+    lecturers.forEach((l) => {
+      map[l.ruleKey] = (map[l.ruleKey] ?? 0) + 1;
+    });
+    return map;
+  }, [lecturers]);
+
+  /** hard ceiling for any lecturer limit — the largest max in the rules */
+  const limitCeiling = useMemo(
+    () => (rules.length ? Math.max(...rules.map((r) => r.maxHours)) : 99),
+    [rules]
+  );
+
+  /** roster members needing attention: their stored pair falls outside
+      the rule's allowed min–max range (⚠ badge rows) */
+  const limitAlertStaff = useMemo(
+    () => lecturers.filter((l) => l.outOfRange),
+    [lecturers]
+  );
+  const overCount = limitAlertStaff.length;
+
+  /** summary toast text for the heading count badge */
+  const overSummary = () => {
+    const list = limitAlertStaff
+      .map((s) => `${s.staffId} (${s.minHours}–${s.maxHours}h)`)
+      .join(" · ");
+    return `⚠ ${overCount} lecturer${overCount === 1 ? "" : "s"} need${overCount === 1 ? "s" : ""} attention — saved limit sits outside the rule's allowed range: ${list}. Snap each to the rule values (or set a limit within the range) from the Edit dialog.`;
+  };
+
+  /* footer note built from the live rule values */
+  const ruleNote = useMemo(() => {
+    if (rules.length === 0) return null;
+    const get = (k: string) => rules.find((r) => r.ruleKey === k);
+    const pieces: string[] = [];
+    const pl = get("PL");
+    if (pl) pieces.push(`PL min ${hoursLabel(pl.minHours)}h`);
+    const bac = get("BACHELOR_ONLY");
+    if (bac) pieces.push(`Bachelor-only min ${hoursLabel(bac.minHours)}h`);
+    const bot = get("BOTH");
+    if (bot) pieces.push(`both levels min ${hoursLabel(bot.minHours)}h`);
+    const dip = get("DIPLOMA_ONLY");
+    if (dip) pieces.push(`Diploma-only min ${hoursLabel(dip.minHours)}h`);
+    const globalMax = Math.max(...rules.map((r) => r.maxHours));
+    pieces.push(`overall max ${hoursLabel(globalMax)}h`);
+    return pieces.join(" · ");
+  }, [rules]);
+
+  /* remount key — every search / sort / filter change (and each edit save)
+     replays the row glide-in */
+  const listSignature = `${typeFilter}|${statusFilter}|${departmentFilter}|${sortKey}|${query}|${warningsOnly ? "warned" : "all"}|${reloadTick}`;
+
+  return (
+    <div className="mx-auto w-full max-w-[1200px]">
+      {/* heading */}
+      <div className="flex flex-wrap items-end justify-between gap-md">
+        <div>
+          <h1 className="text-[32px] font-bold leading-[40px] tracking-[-0.02em] text-text">
+            Lecturers
+          </h1>
+          <p className="mt-1 text-[13px] text-textSecondary">
+            Staff directory &amp; classifications · {department ?? "loading department…"}
+          </p>
+        </div>
+      </div>
+
+      {error && <p className="mt-md text-[13px] text-errorText">{error}</p>}
+
+      {/* filters: classification chips + search (theme 44px input) */}
+      <div className="mt-lg flex flex-wrap items-center gap-sm">
+        <FilterChip
+          label="All"
+          count={counts ? counts.total : null}
+          active={typeFilter === "all"}
+          onClick={() => setTypeFilter("all")}
+        />
+        <FilterChip
+          label="Full-time"
+          count={counts ? counts.fullTime : null}
+          active={typeFilter === "FULL_TIME"}
+          onClick={() => setTypeFilter("FULL_TIME")}
+        />
+        <FilterChip
+          label="Part-time"
+          count={counts ? counts.partTime : null}
+          active={typeFilter === "PART_TIME"}
+          onClick={() => setTypeFilter("PART_TIME")}
+        />
+        <FilterChip
+          label="Programme Leaders"
+          count={counts ? counts.programmeLeaders : null}
+          active={typeFilter === "PL"}
+          onClick={() => setTypeFilter("PL")}
+        />
+        <FilterChip
+          label={
+            <span className="flex items-center gap-[3px]">
+              <TriangleAlert size={13} />
+              Warned
+            </span>
+          }
+          count={overCount}
+          active={warningsOnly}
+          tone="error"
+          onClick={() => setWarningsOnly((v) => !v)}
+        />
+        {/* right group: department (auto-appears with >1 dept) + status + sort + search */}
+        <div className="ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
+          {departments.length > 1 && (
+            <FilterSelect
+              ariaLabel="Filter by department"
+              value={departmentFilter}
+              onChange={setDepartmentFilter}
+            >
+              <option value="all">All departments</option>
+              {departments.map((d) => (
+                <option key={d.code} value={d.code}>
+                  {d.code} · {d.name}
+                </option>
+              ))}
+            </FilterSelect>
+          )}
+          <FilterSelect
+            ariaLabel="Filter by status"
+            value={statusFilter}
+            onChange={(v) => setStatusFilter(v as "all" | "active" | "inactive")}
+          >
+            <option value="all">Status: All</option>
+            <option value="active">Status: Active</option>
+            <option value="inactive">Status: Inactive</option>
+          </FilterSelect>
+          <FilterSelect
+            ariaLabel="Sort staff"
+            value={sortKey}
+            onChange={(v) => setSortKey(v as SortKey)}
+            icon={ArrowDownUp}
+          >
+            <option value="staff_asc">Sort: Staff ID ↑</option>
+            <option value="staff_desc">Sort: Staff ID ↓</option>
+            <option value="name_asc">Sort: Name A → Z</option>
+            <option value="name_desc">Sort: Name Z → A</option>
+            <option value="class_name">Sort: Classification, then name</option>
+            <option value="hours_desc">Sort: Hour rule → low</option>
+          </FilterSelect>
+          <div className="relative w-full sm:w-[260px]">
+            <Search
+              size={16}
+              className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
+            />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search name, staff ID, email…"
+              className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* roster list (Gmail-style rows, one white card) */}
+      <div className="mt-md overflow-hidden rounded-card bg-surface shadow-card">
+        {/* column headings */}
+        <div className="hidden items-center gap-md border-b border-divider px-lg py-sm md:flex">
+          <p className="min-w-[220px] flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
+            Lecturer
+          </p>
+          <p className="hidden w-[92px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary md:block">
+            Staff ID
+          </p>
+          <p className="hidden min-w-0 flex-[1.1] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary lg:block">
+            Contact
+          </p>
+          <p className="hidden w-[168px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary md:block">
+            Classification
+          </p>
+          <p className="hidden w-[168px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary sm:block">
+            Workload limit
+          </p>
+          <p className="w-[84px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
+            Status
+          </p>
+          <p className="w-[88px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
+            Actions
+          </p>
+        </div>
+
+        {/* keyed by filter+sort+search signature — every change replays the row glide-in */}
+        <div key={listSignature}>
+          {lecturers.length === 0 && !error ? (
+            <div
+              style={{ animationDelay: "0ms" }}
+              className="animate-[rowIn_0.26s_ease-out_both] flex items-center gap-sm px-lg py-xl"
+            >
+              <Users size={18} className="shrink-0 text-textSecondary" />
+              <p className="text-[13px] text-textSecondary">
+                Loading lecturers from PostgreSQL…
+              </p>
+            </div>
+          ) : sorted.length === 0 ? (
+            <div
+              style={{ animationDelay: "0ms" }}
+              className="animate-[rowIn_0.26s_ease-out_both] px-lg py-xl text-center"
+            >
+              <p className="text-[14px] font-medium text-textNormal">No lecturer found</p>
+              <p className="mt-1 text-[12.5px] text-textSecondary">
+                No staff member matches “{query.trim()}” with the selected filters.
+              </p>
+            </div>
+          ) : (
+            sorted.map((l, i) => (
+              <div
+                key={l.id}
+                style={{ animationDelay: `${Math.min(i * 22, 440)}ms` }}
+                className="animate-[rowIn_0.26s_ease-out_both] flex flex-wrap items-center gap-x-md gap-y-sm border-b border-divider px-lg py-md transition-colors last:border-b-0 hover:bg-hoverBg/60"
+              >
+              {/* identity: name + position */}
+              <div className="flex min-w-[220px] flex-1 items-center gap-sm">
+                <div className="min-w-0">
+                  <p className="text-[14px] font-semibold text-text">{l.fullName}</p>
+                  <p className="mt-[2px] whitespace-nowrap text-[12px] text-textSecondary">
+                    {l.position ?? "Lecturer"}
+                    {l.semesterRecords > 0
+                      ? ` · ${l.semesterRecords} semester record${l.semesterRecords > 1 ? "s" : ""}`
+                      : ""}
+                  </p>
+                </div>
+              </div>
+
+              {/* staff ID */}
+              <span className="hidden w-[92px] shrink-0 md:block">
+                <span className="rounded-badge bg-background px-sm py-1 text-[12px] font-medium tracking-[0.04em] text-textNormal">
+                  {l.staffId}
+                </span>
+              </span>
+
+              {/* contact */}
+              <div className="hidden min-w-0 flex-[1.1] lg:block">
+                <p className="truncate text-[12.5px] text-textSecondary">{l.email ?? "—"}</p>
+                {l.phone && (
+                  <p className="truncate text-[11.5px] text-textSecondary">{l.phone}</p>
+                )}
+              </div>
+
+              {/* classification badges */}
+              <div className="hidden w-[168px] shrink-0 flex-wrap gap-xs md:flex">
+                {l.isPl && (
+                  <span className="rounded-badge bg-primaryLight px-sm py-[3px] text-[11.5px] font-semibold text-primary">
+                    Programme Leader
+                  </span>
+                )}
+                <span
+                  className={`rounded-badge px-sm py-[3px] text-[11.5px] font-semibold ${EMPLOYMENT_CLS[l.employmentType]}`}
+                >
+                  {EMPLOYMENT_LABEL[l.employmentType]}
+                </span>
+              </div>
+
+              {/* workload limit + roll-up */}
+              <div className="hidden sm:block">
+                <WorkloadCell
+                  lecturer={l}
+                  limitCeiling={limitCeiling}
+                  onExceedToast={setLimitToast}
+                />
+              </div>
+
+              {/* active status */}
+              <StatusDot lecturer={l} />
+
+              {/* row action — open the edit dialog (UC_CPM_01) */}
+              <div className="flex w-[88px] items-center">
+                <button
+                  type="button"
+                  onClick={() => setEditing(l)}
+                  title={`Edit ${l.fullName}`}
+                  aria-label={`Edit ${l.fullName}`}
+                  className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-primary hover:bg-primaryLight hover:text-primary active:scale-[0.97]"
+                >
+                  <Pencil size={14} />
+                </button>
+              </div>
+            </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* hour-limit rules editor — role/course-based limits (editable);
+          a fresh save also re-resolves the sidebar's ⚠ sum via rail refresh */}
+      <RulesEditor
+        rules={rules}
+        staffCountByRule={staffCountByRule}
+        onSaved={() => {
+          setReloadTick((t) => t + 1);
+          window.dispatchEvent(new Event("tw:rail:refresh"));
+        }}
+      />
+
+      <p className="mt-md text-[12px] text-textSecondary">
+        {counts
+          ? `Showing ${sorted.length} of ${counts.total} staff — ${counts.fullTime} full-time · ${counts.partTime} part-time · ${counts.programmeLeaders} programme leader(s). ${
+              ruleNote
+                ? `Hour limits — ${ruleNote} — resolved per lecturer from role and courses taught.`
+                : "Hour limit rules load with the roster."
+            }`
+          : "Hour limit rules load with the roster."}
+      </p>
+
+      {/* lecturer edit dialog (UC_CPM_01) with the live limit ceiling guard */}
+      {editing && (
+        <EditLecturerDialog
+          lecturer={editing}
+          ceiling={limitCeiling}
+          onExceed={setLimitToast}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            setLimitToast(null);
+            setReloadTick((t) => t + 1);
+            window.dispatchEvent(new Event("tw:rail:refresh"));
+          }}
+        />
+      )}
+
+      {/* exceed toast — after the dialog in the DOM so it paints above its backdrop */}
+      <Toast message={limitToast} onDone={() => setLimitToast(null)} />
+    </div>
   );
 }
