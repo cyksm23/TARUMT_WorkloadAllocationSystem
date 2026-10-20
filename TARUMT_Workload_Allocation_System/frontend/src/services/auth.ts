@@ -52,7 +52,7 @@ export function clearAuth(): void {
 export function landingFor(role: AuthUser["role"]): string {
   switch (role) {
     case "coordinator":
-      return "/allocations";
+      return "/dashboard";
     case "hod":
       return "/workloads";
     default:
