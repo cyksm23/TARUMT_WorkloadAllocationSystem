@@ -4,10 +4,6 @@ node_modules/
 out/
 .env*.local
 
-# PHP
-vendor/
-.env
-
 # Python
 __pycache__/
 *.pyc

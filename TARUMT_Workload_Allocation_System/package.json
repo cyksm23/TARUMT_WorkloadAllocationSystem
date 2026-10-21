@@ -1,0 +1,14 @@
+{
+  "name": "tarumt-workload-allocation-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Root launcher — starts the Express backend (:8000) and the Next.js frontend (:3000) with one command",
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend -c blue,green \"npm --prefix backend-express run dev\" \"npm --prefix frontend run dev\"",
+    "dev:backend": "npm --prefix backend-express run dev",
+    "dev:frontend": "npm --prefix frontend run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

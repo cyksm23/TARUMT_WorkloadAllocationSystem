@@ -11,7 +11,7 @@ claims and manage approval workflows — TARUMT Sabah branch.
 | Animations | React Bits (react-bits) |
 | Charts | Recharts |
 | Icons | lucide-react |
-| Backend (core API) | PHP 8.2+ (Laravel-style layout, no ORM, raw PDO) |
+| Backend (core API) | Node.js + Express (TypeScript) — separated REST API (port 8000) |
 | Backend (engine) | Python 3.11+ / FastAPI (algorithms only) |
 | Database | PostgreSQL 15+, managed via psql CLI |
 | Styling | Custom design system (Apple + Linear + Modern SaaS) |
@@ -21,7 +21,7 @@ claims and manage approval workflows — TARUMT Sabah branch.
 ```
 TARUMT_Workload_Allocation_System/
   frontend/          Next.js app (src/app pages, components, services, types)
-  backend-php/       PHP API — public/index.php front controller, raw PDO
+  backend-express/   Express TypeScript REST API (src/app.ts, routes/) — the backend
   backend-python/    FastAPI engine — app/main.py, algorithms/
   database/          schema.sql, migrations/, seeds/
   docs/              system-architecture.md
@@ -32,7 +32,7 @@ TARUMT_Workload_Allocation_System/
 | Port | Service |
 |------|---------|
 | 3000 | Next.js frontend |
-| 8000 | PHP API |
+| 8000 | Express REST API (backend-express) |
 | 8001 | Python API (FastAPI) |
 | 5432 | PostgreSQL |
 
@@ -61,15 +61,19 @@ npm run dev
 
 (From-scratch alternative: `npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias "@/*"`, then `npm install react-bits lucide-react recharts`.)
 
-### Phase 3 — PHP backend
+### Phase 3 — Express backend (the core API)
 
 ```bash
-cd backend-php
-composer install
-php -S localhost:8000 -t public
+cd backend-express
+npm install
+npm run dev
 ```
 
 Health check: `curl http://localhost:8000/api/health`
+
+The frontend calls this backend first and falls back to Next.js route
+handlers when the service is not running (`src/services/apiClient.ts`),
+mirroring the login page's existing try-primary-then-fallback pattern.
 
 ### Phase 4 — Python backend
 

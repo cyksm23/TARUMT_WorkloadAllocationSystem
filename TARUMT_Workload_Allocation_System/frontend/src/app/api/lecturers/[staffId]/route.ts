@@ -185,3 +185,68 @@ export async function PATCH(
     );
   }
 }
+
+/**
+ * DELETE /api/lecturers/:staffId — remove a staff record (fallback twin of
+ * the Express backend). A hard delete from the roster; FK violations
+ * (still-linked workloads/assignments) surface as 409 with a deactivation
+ * suggestion instead of silently losing data.
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: { staffId: string } }
+) {
+  const staffId = typeof params.staffId === "string" ? params.staffId.trim() : "";
+  if (!/^\d{4}$/.test(staffId)) {
+    return NextResponse.json(
+      { ok: false, message: "Staff ID must be exactly 4 digits." },
+      { status: 400 }
+    );
+  }
+  try {
+    /* workloads.lecturer_id is ON DELETE CASCADE — a blind delete would
+       silently erase the lecturer's workload rows. Refuse first and point
+       at the soft (inactive) path instead. */
+    const linked = await pool.query(
+      "SELECT COUNT(*)::int AS refs FROM workloads WHERE lecturer_id = (SELECT id FROM lecturers WHERE staff_id = $1)",
+      [staffId]
+    );
+    const refs = Number(linked.rows[0]?.refs ?? 0);
+    if (refs > 0) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: `Staff ${staffId} still has ${refs} linked workload row(s) — set them inactive instead of deleting.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    const result = await pool.query(
+      "DELETE FROM lecturers WHERE staff_id = $1 RETURNING staff_id",
+      [staffId]
+    );
+    if (result.rowCount === 0) {
+      return NextResponse.json(
+        { ok: false, message: `No staff member "${staffId}".` },
+        { status: 404 }
+      );
+    }
+    return NextResponse.json({ ok: true, staffId });
+  } catch (err) {
+    if ((err as { code?: string }).code === "23503") {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: `Staff ${staffId} still has linked records (workloads or assignments) — deactivate them instead of deleting.`,
+        },
+        { status: 409 }
+      );
+    }
+    console.error("DELETE /api/lecturers/[staffId] failed:", err);
+    return NextResponse.json(
+      { ok: false, message: "Database error while deleting the lecturer." },
+      { status: 500 }
+    );
+  }
+}

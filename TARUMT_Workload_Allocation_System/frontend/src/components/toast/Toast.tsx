@@ -16,19 +16,22 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 
 interface ToastProps {
   /** Current message, or null for no toast. */
   message: string | null;
   /** Called after the exit animation completes (parent clears its state). */
   onDone: () => void;
+  /** error = the default red confirmation banner; success = green
+      confirmation (e.g. deletion/add-staff completion) */
+  tone?: "error" | "success";
 }
 
 /** read time before the toast dismisses itself */
 const TOAST_MS = 3000;
 
-export default function Toast({ message, onDone }: ToastProps) {
+export default function Toast({ message, onDone, tone = "error" }: ToastProps) {
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
 
@@ -80,10 +83,24 @@ export default function Toast({ message, onDone }: ToastProps) {
       onMouseLeave={() => setHovering(false)}
       className={`${
         closing ? "animate-toast-out" : "animate-slide-down"
-      } fixed left-1/2 top-8 z-50 flex max-w-[94vw] items-center gap-md rounded-button border border-error/25 bg-errorBg px-lg py-md shadow-card`}
+      } fixed left-1/2 top-8 z-50 flex max-w-[94vw] items-center gap-md rounded-button border px-lg py-md shadow-card ${
+        tone === "success"
+          ? "border-transparent bg-[#34C759]"
+          : "border-error/25 bg-errorBg"
+      }`}
     >
-      <XCircle size={22} className="shrink-0 text-error" />
-      <p className="text-[16px] font-semibold leading-snug text-errorText">{shown}</p>
+      {tone === "success" ? (
+        <CheckCircle2 size={22} className="shrink-0 text-white" />
+      ) : (
+        <XCircle size={22} className="shrink-0 text-error" />
+      )}
+      <p
+        className={`text-[16px] font-semibold leading-snug ${
+          tone === "success" ? "text-white" : "text-errorText"
+        }`}
+      >
+        {shown}
+      </p>
     </div>
   );
 }

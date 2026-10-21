@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "@/services/apiClient";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock } from "lucide-react";
 import Sidebar from "./Sidebar";
@@ -46,7 +47,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
      lecturer's limit, saving rules, …) so badges re-resolve instantly —
      the Lecturers ⚠ sum always mirrors the roster's warning buttons. */
   const refreshCounts = useCallback(() => {
-    fetch("/api/dashboard/summary")
+    apiFetch("/api/dashboard/summary")
       .then((r) => r.json())
       .then((d) => {
         if (d.ok) {

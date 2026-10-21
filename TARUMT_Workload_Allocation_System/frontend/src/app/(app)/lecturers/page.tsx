@@ -19,7 +19,8 @@
  */
 
 import { Children, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownUp, Check, ChevronDown, Loader2, Pencil, RefreshCcw, Save, Search, TriangleAlert, Users, X, type LucideIcon } from "lucide-react";
+import { ArrowDown, ArrowDownUp, ArrowUp, Check, ChevronDown, Loader2, Pencil, Plus, RefreshCcw, Save, Search, Trash2, TriangleAlert, Users, X, type LucideIcon } from "lucide-react";
+import { apiFetch } from "@/services/apiClient";
 import Toast from "@/components/toast/Toast";
 
 interface LecturerRow {
@@ -119,6 +120,8 @@ function FilterSelect({
   value,
   onChange,
   icon: Icon,
+  /** dialog fields stretch the pill to the full cell width (like inputs) */
+  fullWidth,
   children,
 }: {
   ariaLabel: string;
@@ -126,6 +129,7 @@ function FilterSelect({
   onChange: (v: string) => void;
   /** optional leading icon (e.g. the arrows on the sort selector) */
   icon?: LucideIcon;
+  fullWidth?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -150,7 +154,12 @@ function FilterSelect({
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        /* consume Escape so dialog-level handlers don't close the whole
+           dialog while only this menu should close */
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
     };
     document.addEventListener("mousedown", onPointer);
     document.addEventListener("keydown", onKey);
@@ -169,7 +178,9 @@ function FilterSelect({
         aria-expanded={open}
         aria-label={ariaLabel}
         onClick={() => setOpen((o) => !o)}
-        className={`relative flex h-9 w-full items-center gap-xs whitespace-nowrap rounded-button border bg-surface pr-8 text-[13px] font-medium text-textNormal outline-none transition-colors sm:w-auto ${
+        className={`relative flex h-9 items-center gap-xs whitespace-nowrap rounded-button border bg-surface pr-8 text-[13px] font-medium text-textNormal outline-none transition-colors ${
+          fullWidth ? "w-full" : "w-full sm:w-auto"
+        } ${
           open ? "border-primary" : "border-divider hover:bg-background"
         } ${Icon ? "pl-8" : "pl-md"}`}
       >
@@ -342,7 +353,7 @@ function RulesEditor({
     setError(null);
     setSaving(true);
     try {
-      const r = await fetch("/api/workload-rules", {
+      const r = await apiFetch("/api/workload-rules", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -693,6 +704,14 @@ function EditLecturerDialog({
   const [fullName, setFullName] = useState(lecturer.fullName);
   const [email, setEmail] = useState(lecturer.email ?? "");
   const [phone, setPhone] = useState(lecturer.phone ?? "");
+  /* position is chosen via the same selection list as Add Staff; when the
+     stored position is a custom title, it shows as "Current — … (custom)" */
+  const knownPositions = POSITION_OPTIONS as readonly string[];
+  const storedIsCustom =
+    !!(lecturer.position ?? "") && !knownPositions.includes(lecturer.position ?? "");
+  const [positionSelect, setPositionSelect] = useState<string>(
+    knownPositions.includes(lecturer.position ?? "") ? (lecturer.position ?? "") : POSITION_OTHER
+  );
   const [position, setPosition] = useState(lecturer.position ?? "");
   const [employmentType, setEmploymentType] = useState<LecturerRow["employmentType"]>(
     lecturer.employmentType
@@ -705,6 +724,15 @@ function EditLecturerDialog({
   const [maxLimit, setMaxLimit] = useState(hoursLabel(lecturer.maxHours));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** set on the first Save click — gates the per-field inline warnings */
+  const [attempted, setAttempted] = useState(false);
+  /** blur-gates for the format fields — warnings appear when the user
+      LEAVES the field (or on a save attempt), never while still typing */
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  /** server refused uniqueness (23505) — staff_id is fixed here, so a 409
+      can only mean the edited EMAIL collides with another record */
+  const [serverEmailDupe, setServerEmailDupe] = useState(false);
 
   /* Escape closes while the dialog is open */
   useEffect(() => {
@@ -734,6 +762,20 @@ function EditLecturerDialog({
       (mnLimit < lecturer.suggestedMin || mnLimit > lecturer.suggestedMax)) ||
     (Number.isFinite(mxLimit) &&
       (mxLimit < lecturer.suggestedMin || mxLimit > lecturer.suggestedMax));
+  /** contact validation — empty is fine (optional fields), a filled value
+      must match its format; drives the red borders + Save block */
+  const emailInvalid = contactInvalid(email, EMAIL_RE);
+  const phoneInvalid = contactInvalid(normalizePhone(phone), MY_PHONE_RE);
+  /* per-field messages — appear only after a save attempt so the form never
+     nags while it is still being filled in */
+  const nameMsg = attempted && !fullName.trim();
+  const emailMsg = (attempted || emailTouched) && emailInvalid;
+  const phoneMsg = (attempted || phoneTouched) && phoneInvalid;
+  const posMsg = attempted && positionSelect === POSITION_OTHER && !position.trim();
+  /** Save runs only when every per-field flag is clear; server-level
+      problems (duplicates, DB errors) keep their banner below the grid */
+  const fieldBlocked =
+    nameMsg || emailMsg || phoneMsg || posMsg || minLimitBad || maxLimitBad || limitBlocked;
 
   useEffect(() => {
     if (!limitBlocked) {
@@ -749,38 +791,27 @@ function EditLecturerDialog({
   }, [limitBlocked, exceededValue, ceiling, onExceed]);
 
   const save = async () => {
+    /* one save attempt reveals every per-field message at once; each warning
+       then disappears live when its field is fixed. Server-level problems
+       (duplicates, DB errors) still use the banner below the grid. */
     setError(null);
-    if (limitBlocked) {
-      setError(
-        `Cannot save — ${exceededValue}h exceeds the ${ceiling}h maximum set in the Hour-limit rules.`
-      );
-      return;
-    }
-    if (!fullName.trim()) {
-      setError("Full name is required.");
-      return;
-    }
+    setAttempted(true);
+    if (fieldBlocked) return;
+    /* the chosen position — fixed selection value, or the custom text under "Other" */
+    const finalPosition = positionSelect === POSITION_OTHER ? position.trim() : positionSelect;
     /* validate + send the stored limit pair (0.5–45 h/wk policy bounds) */
     const mn = Number(minLimit);
     const mx = Number(maxLimit);
-    if (badHours(mn) || badHours(mx)) {
-      setError("Hour limits: 0.5–45 h/wk, numbers only, two decimals max.");
-      return;
-    }
-    if (mn > mx) {
-      setError("Minimum limit cannot exceed maximum limit.");
-      return;
-    }
     setSaving(true);
     try {
-      const r = await fetch(`/api/lecturers/${lecturer.staffId}`, {
+      const r = await apiFetch(`/api/lecturers/${lecturer.staffId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fullName: fullName.trim(),
           email: email.trim(),
           phone: phone.trim(),
-          position: position.trim(),
+          position: finalPosition,
           employmentType,
           isPl,
           isActive,
@@ -789,8 +820,13 @@ function EditLecturerDialog({
         }),
       });
       const d = (await r.json()) as { ok: boolean; message?: string };
-      if (d.ok) onSaved();
-      else setError(d.message ?? "Could not save the lecturer.");
+      if (d.ok) {
+        onSaved();
+      } else if ((d.message ?? "").includes("already registered")) {
+        /* staff_id is fixed in this dialog, so a 409 means the edited
+           EMAIL collides with another record */
+        setServerEmailDupe(true);
+      } else setError(d.message ?? "Could not save the lecturer.");
     } catch {
       setError("Network error while saving the lecturer.");
     } finally {
@@ -837,39 +873,123 @@ function EditLecturerDialog({
             <input value={lecturer.staffId} readOnly disabled className={INPUT_CLS} />
           </Field>
           <Field label="Full name" wide>
-            <input
-              type="text"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className={INPUT_CLS}
-            />
+            <div className="flex flex-col gap-1">
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                maxLength={200}
+                className={`${INPUT_CLS} ${
+                  nameMsg
+                    ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                    : ""
+                }`}
+              />
+              {nameMsg && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  Full name is required.
+                </p>
+              )}
+            </div>
           </Field>
           <Field label="Email">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@tarc.edu.my"
-              className={INPUT_CLS}
-            />
+            <div className="flex flex-col gap-1">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setServerEmailDupe(false);
+                }}
+                onBlur={() => setEmailTouched(true)}
+                placeholder="name@tarc.edu.my"
+                maxLength={200}
+                className={`${INPUT_CLS} ${
+                  emailMsg || serverEmailDupe
+                    ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                    : ""
+                }`}
+              />
+              {(emailMsg || serverEmailDupe) && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  {serverEmailDupe && !emailMsg
+                    ? "That email is already registered."
+                    : "Please enter a valid email"}
+                </p>
+              )}
+            </div>
           </Field>
           <Field label="Phone">
-            <input
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="e.g. 012-3456789"
-              className={INPUT_CLS}
-            />
+            <div className="flex flex-col gap-1">
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                onBlur={() => setPhoneTouched(true)}
+                placeholder="e.g. 012-3456789"
+                maxLength={20}
+                className={`${INPUT_CLS} ${
+                  phoneMsg
+                    ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                    : ""
+                }`}
+              />
+              {phoneMsg && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  Please enter a valid phone number
+                </p>
+              )}
+            </div>
           </Field>
           <Field label="Position" wide>
-            <input
-              type="text"
-              value={position}
-              onChange={(e) => setPosition(e.target.value)}
-              placeholder="e.g. Senior Lecturer"
-              className={INPUT_CLS}
-            />
+            <div className="flex flex-col gap-sm">
+              {/* same selection list as Add Staff — fixed titles + custom option,
+                  and the stored value is always visible on open */}
+              {/* same pill design as the toolbar's Sort/Status selectors */}
+              <FilterSelect
+                ariaLabel="Position"
+                value={positionSelect}
+                fullWidth
+                onChange={(v) => setPositionSelect(v)}
+              >
+                {storedIsCustom && (
+                  <option value={POSITION_OTHER}>
+                    {`Current — “${lecturer.position}” (custom)`}
+                  </option>
+                )}
+                {POSITION_OPTIONS.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+                {!storedIsCustom && <option value={POSITION_OTHER}>Other… (custom position)</option>}
+              </FilterSelect>
+              {positionSelect === POSITION_OTHER && (
+                <>
+                  <input
+                    type="text"
+                    value={position}
+                    onChange={(e) => setPosition(e.target.value)}
+                    placeholder="Type the custom position here — e.g. Tutor"
+                    maxLength={100}
+                    className={`${INPUT_CLS} ${
+                      posMsg
+                        ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                        : ""
+                    }`}
+                  />
+                  {posMsg && (
+                    <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                      Type the custom position title.
+                    </p>
+                  )}
+                </>
+              )}
+              <p className="text-[11.5px] leading-snug text-textSecondary">
+                The role chip under “Role &amp; status” still decides the Programme-Leader rule
+                — this list only stores the job title.
+              </p>
+            </div>
           </Field>
 
           {/* classification — single choice (drives the hour-limit engine) */}
@@ -966,6 +1086,15 @@ function EditLecturerDialog({
                   {hoursLabel(lecturer.suggestedMax)}h)
                 </button>
               </div>
+              {(limitBlocked || minLimitBad || maxLimitBad) && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  {limitBlocked
+                    ? `Cannot exceed the ${ceiling}h rules ceiling — lower the pair to save.`
+                    : pairBad
+                      ? "Minimum limit cannot exceed maximum limit."
+                      : "Hour limits: numbers only — 0.5–45 h/wk, two decimals max."}
+                </p>
+              )}
               <p className="max-w-[360px] text-[11.5px] leading-snug text-textSecondary">
                 {`Stored for "${lecturer.ruleLabel}" at ${lecturer.minHours}–${lecturer.maxHours}h — `}
                 {dialogOutOfRange
@@ -982,12 +1111,8 @@ function EditLecturerDialog({
           </Field>
         </div>
 
-        {/* inline error */}
-        {error && (
-          <p className="mt-md rounded-button bg-errorBg px-md py-sm text-[12.5px] font-medium text-errorText">
-            {error}
-          </p>
-        )}
+        {/* field-level problems live under their own inputs; server-level
+            errors surface in the DevTools console via the apiClient logger */}
 
         {/* footer actions */}
         <div className="mt-lg flex items-center justify-end gap-sm border-t border-divider pt-lg">
@@ -1002,7 +1127,9 @@ function EditLecturerDialog({
           <button
             type="button"
             onClick={save}
-            disabled={saving || limitBlocked}
+            /* stays clickable with field problems — the click triggers the
+               per-field inline warnings; only a network round-trip disables it */
+            disabled={saving}
             title={
               limitBlocked
                 ? `Blocked — limit exceeds the ${ceiling}h maximum from the Hour-limit rules`
@@ -1012,6 +1139,627 @@ function EditLecturerDialog({
           >
             {saving && <Loader2 size={14} className="animate-spin" />}
             {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ── shared dialog validators ───────────────────────────────────────────────
+    one source of truth for the Add-Staff and Edit-lecturer forms */
+/* loose e-mail sanity — one @, dot-suffixed domain, no whitespace */
+const EMAIL_RE = /^\S+@\S+\.\S+$/;
+/* Malaysian phone sanity — mobile 01x-xxxxxxx (also written +60 12-xxx) or
+   fixed line 0[3-9]-xxxxxxx; the separators used when writing MY numbers
+   (+, spaces, dashes, parentheses) are stripped before testing */
+const MY_PHONE_RE = /^(?:(?:60|0)1[0-9]{8,9}|(?:60|0)[3-9][0-9]{6,7})$/;
+/** strips the separators Malaysian numbers are written with */
+const normalizePhone = (raw: string) => raw.replace(/[+()\s-]/g, "");
+/** optional-text invalidity — EMPTY always stays valid (both are optional);
+    a filled field must match its format rule to unblock Save */
+const contactInvalid = (value: string, re: RegExp) =>
+  value.trim() !== "" && !re.test(value.trim());
+
+/** Position choices for newly added staff — the department's four fixed job
+    titles plus "Other", which reveals an editable free-text input. Values
+    match the labels stored in `lecturers.position` exactly. */
+const POSITION_OPTIONS = [
+  "Programme Leader",
+  "Lecturer",
+  "Senior Lecturer",
+  "Assistant Professor",
+] as const;
+const POSITION_OTHER = "__OTHER__";
+/** department codes present in the seed data */
+const ADD_DEPARTMENTS = ["DCIT", "DACB", "DSSH"] as const;
+
+function AddStaffDialog({
+  defaultMin,
+  defaultMax,
+  /** every staff ID currently on the roster — powers the live duplicate check */
+  existingStaffIds,
+  ceiling,
+  onClose,
+  onSaved,
+}: {
+  /** DEFAULT rule's suggested pair — the starter snapshot for the record */
+  defaultMin: number;
+  defaultMax: number;
+  /** every staff ID currently on the roster — powers the live duplicate check */
+  existingStaffIds: string[];
+  /** hard maximum (h/wk) from the Hour-limit rules */
+  ceiling: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [staffId, setStaffId] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [positionChoice, setPositionChoice] = useState<string>("Lecturer");
+  const [customPosition, setCustomPosition] = useState("");
+  const [employmentType, setEmploymentType] = useState<LecturerRow["employmentType"]>("FULL_TIME");
+  const [departmentCode, setDepartmentCode] = useState<string>("DCIT");
+  const [isActive, setIsActive] = useState(true);
+  /* stored limit pair — seeded once at creation from the DEFAULT rule */
+  const [minLimit, setMinLimit] = useState(hoursLabel(defaultMin));
+  const [maxLimit, setMaxLimit] = useState(hoursLabel(defaultMax));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** set on the first Save click — gates the per-field inline warnings */
+  const [attempted, setAttempted] = useState(false);
+  /** blur-gates for the format fields — warnings appear when the user
+      LEAVES the field (or on a save attempt), never while still typing */
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  /** server-side uniqueness refusal (23505) — flags the staff-ID field */
+  const [serverDupe, setServerDupe] = useState(false);
+
+  /* Escape closes while the dialog is open */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  /* limits: policy bounds + pairing + ceiling — drive red borders and Save */
+  const mnLimit = Number(minLimit);
+  const mxLimit = Number(maxLimit);
+  const pairBad =
+    Number.isFinite(mnLimit) && Number.isFinite(mxLimit) && mnLimit > mxLimit;
+  const minBad = badHours(mnLimit) || pairBad;
+  const maxBad = badHours(mxLimit) || pairBad;
+  const overCeiling = Math.max(
+    Number.isFinite(mnLimit) ? mnLimit : 0,
+    Number.isFinite(mxLimit) ? mxLimit : 0
+  ) > ceiling;
+  const limitBlocked = overCeiling;
+  const exceededValue = Math.max(
+    Number.isFinite(mnLimit) ? mnLimit : 0,
+    Number.isFinite(mxLimit) ? mxLimit : 0
+  );
+  const customNeeded = positionChoice === POSITION_OTHER && !customPosition.trim();
+  /** contact validation — empty is fine (optional fields), a filled value
+      must match its format; drives the red borders + Save block */
+  const emailInvalid = contactInvalid(email, EMAIL_RE);
+  const phoneInvalid = contactInvalid(normalizePhone(phone), MY_PHONE_RE);
+  /* per-field messages — appear only after a save attempt so the form never
+     nags while it is still being filled in */
+  const codeTyped = staffId.trim();
+  /** live duplicate check vs the current roster — an exact 4-digit match
+      flags immediately, before any save attempt */
+  const staffIdDupe = codeTyped.length === 4 && existingStaffIds.includes(codeTyped);
+  const nameMsg = attempted && !fullName.trim();
+  const staffIdMsg = attempted && !/^\d{4}$/.test(codeTyped);
+  const emailMsg = (attempted || emailTouched) && emailInvalid;
+  const phoneMsg = (attempted || phoneTouched) && phoneInvalid;
+  const posMsg = attempted && customNeeded;
+  /** Save runs only when every per-field flag is clear; server-level
+      problems keep their banner (duplicates surface on the field itself) */
+  const fieldBlocked =
+    nameMsg ||
+    staffIdMsg ||
+    staffIdDupe ||
+    serverDupe ||
+    emailMsg ||
+    phoneMsg ||
+    posMsg ||
+    minBad ||
+    maxBad ||
+    overCeiling;
+
+  const toggleChipClass = (on: boolean) =>
+    `flex h-9 items-center gap-xs rounded-badge px-md text-[12.5px] transition-colors ${
+      on
+        ? "bg-primaryLight font-semibold text-primary"
+        : "border border-divider bg-surface font-medium text-textNormal hover:bg-hoverBg"
+    }`;
+
+  const save = async () => {
+    /* one save attempt reveals every per-field message at once; each warning
+       then disappears live when its field is fixed. Server-level problems
+       (duplicates, unknown department, DB errors) still use the banner. */
+    setError(null);
+    setAttempted(true);
+    if (fieldBlocked) return;
+    const code = staffId.trim();
+    const position = positionChoice === POSITION_OTHER ? customPosition.trim() : positionChoice;
+    /* validate + seed the stored limit pair (0.5–45 h/wk policy bounds) */
+    const mn = Number(minLimit);
+    const mx = Number(maxLimit);
+    setSaving(true);
+    try {
+      const r = await apiFetch("/api/lecturers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staffId: code,
+          fullName: fullName.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          position,
+          employmentType,
+          isPl: position === "Programme Leader",
+          isActive,
+          departmentCode: departmentCode.trim().toUpperCase(),
+          minHours: Math.round(mn * 100) / 100,
+          maxHours: Math.round(mx * 100) / 100,
+        }),
+      });
+      const d = (await r.json()) as { ok: boolean; message?: string };
+      if (d.ok) onSaved();
+      else if ((d.message ?? "").includes("already registered")) {
+        /* DB-level uniqueness refused it — surface on the staff-ID field */
+        setServerDupe(true);
+      }
+      else setError(d.message ?? "Could not add the lecturer.");
+    } catch {
+      setError("Network error while adding the lecturer.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="animate-[menuIn_0.2s_ease-out_both] max-h-[calc(100vh-64px)] w-full max-w-[560px] overflow-y-auto rounded-card border border-divider bg-surface p-lg shadow-card">
+        {/* title bar */}
+        <div className="flex items-start justify-between gap-md">
+          <div>
+            <h2 className="text-[18px] font-bold leading-[26px] text-text">Add staff</h2>
+            <p className="mt-[2px] text-[12.5px] text-textSecondary">
+              Create a lecturer record — it joins the roster immediately on save.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-button text-textSecondary transition-colors hover:bg-hoverBg hover:text-text"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* fields */}
+        <div className="mt-lg grid grid-cols-1 gap-md sm:grid-cols-2">
+          <Field label="Staff ID" wide>
+            <div className="flex flex-col gap-1">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={staffId}
+                onChange={(e) => {
+                  setStaffId(e.target.value.replace(/\D/g, "").slice(0, 4));
+                  setServerDupe(false);
+                }}
+                placeholder="e.g. 1013"
+                className={`${INPUT_CLS} ${
+                  staffIdMsg || staffIdDupe || serverDupe
+                    ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                    : ""
+                }`}
+              />
+              {(staffIdMsg || staffIdDupe || serverDupe) && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  {serverDupe && !staffIdDupe
+                    ? "That staff ID or email is already registered."
+                    : staffIdDupe
+                      ? "This staff ID is already registered — duplicate staff IDs are not allowed."
+                      : "Staff ID must be exactly 4 digits."}
+                </p>
+              )}
+            </div>
+          </Field>
+          <Field label="Full name" wide>
+            <div className="flex flex-col gap-1">
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="e.g. En. Ahmad Bin Ali"
+                maxLength={200}
+                className={`${INPUT_CLS} ${
+                  nameMsg
+                    ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                    : ""
+                }`}
+              />
+              {nameMsg && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  Full name is required.
+                </p>
+              )}
+            </div>
+          </Field>
+          <Field label="Email">
+            <div className="flex flex-col gap-1">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => setEmailTouched(true)}
+                placeholder="name@tarc.edu.my"
+                maxLength={200}
+                className={`${INPUT_CLS} ${
+                  emailMsg
+                    ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                    : ""
+                }`}
+              />
+              {emailMsg && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  Please enter a valid email
+                </p>
+              )}
+            </div>
+          </Field>
+          <Field label="Phone">
+            <div className="flex flex-col gap-1">
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                onBlur={() => setPhoneTouched(true)}
+                placeholder="e.g. 012-3456789"
+                maxLength={20}
+                className={`${INPUT_CLS} ${
+                  phoneMsg
+                    ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                    : ""
+                }`}
+              />
+              {phoneMsg && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  Please enter a valid phone number
+                </p>
+              )}
+            </div>
+          </Field>
+
+          {/* position — selection only, with an editable "Other" option */}
+          <Field label="Position" wide>
+            <div className="flex flex-col gap-sm">
+              {/* same pill design as the toolbar's Sort/Status selectors */}
+              <FilterSelect
+                ariaLabel="Position"
+                value={positionChoice}
+                fullWidth
+                onChange={(v) => {
+                  setPositionChoice(v);
+                  if (v !== POSITION_OTHER) setCustomPosition("");
+                }}
+              >
+                {POSITION_OPTIONS.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+                <option value={POSITION_OTHER}>Other… (custom position)</option>
+              </FilterSelect>
+              {positionChoice === POSITION_OTHER && (
+                <>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={customPosition}
+                    onChange={(e) => setCustomPosition(e.target.value)}
+                    placeholder="Type the custom position here — e.g. Tutor"
+                    maxLength={100}
+                    className={`${INPUT_CLS} ${
+                      posMsg
+                        ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                        : ""
+                    }`}
+                  />
+                  {posMsg && (
+                    <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                      Type the custom position title.
+                    </p>
+                  )}
+                </>
+              )}
+              <p className="text-[11.5px] leading-snug text-textSecondary">
+                Choosing{" "}
+                <span className="font-medium text-textNormal">Programme Leader</span> sets the
+                role flag that resolves the PL hour-limit rule.
+              </p>
+            </div>
+          </Field>
+
+          {/* department — same pill design as the position selector */}
+          <Field label="Department">
+            <FilterSelect
+              ariaLabel="Department"
+              value={departmentCode}
+              fullWidth
+              onChange={setDepartmentCode}
+            >
+              {ADD_DEPARTMENTS.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
+            </FilterSelect>
+          </Field>
+
+          {/* classification — single choice (drives the hour-limit engine) */}
+          <Field label="Classification">
+            <div className="flex flex-wrap gap-sm">
+              {(["FULL_TIME", "PART_TIME", "CONTRACT"] as const).map((t) => {
+                const on = employmentType === t;
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setEmploymentType(t)}
+                    className={toggleChipClass(on)}
+                  >
+                    {on && <Check size={13} />}
+                    {EMPLOYMENT_LABEL[t]}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+
+          {/* status — active by default */}
+          <Field label="Status" wide>
+            <div className="flex flex-wrap gap-sm">
+              <button
+                type="button"
+                onClick={() => setIsActive((v) => !v)}
+                className={toggleChipClass(isActive)}
+              >
+                {isActive && <Check size={13} />}
+                Status · {isActive ? "active" : "inactive"}
+              </button>
+            </div>
+          </Field>
+
+          {/* workload limit — seeded once, snapshot-stable afterwards */}
+          <Field label="Workload limit (min &amp; max h/wk)" wide>
+            <div className="flex flex-col gap-sm">
+              <div className="flex flex-nowrap items-end gap-sm">
+                <label className="flex w-[104px] shrink-0 flex-col gap-1">
+                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-textSecondary">
+                    Min h/wk
+                  </span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={99}
+                    step={0.5}
+                    value={minLimit}
+                    onChange={(e) => setMinLimit(sanitizeHours(e.target.value))}
+                    className={`${INPUT_CLS} ${
+                      minBad || overCeiling
+                        ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                        : ""
+                    }`}
+                  />
+                </label>
+                <label className="flex w-[104px] shrink-0 flex-col gap-1">
+                  <span className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-textSecondary">
+                    Max h/wk
+                  </span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={99}
+                    step={0.5}
+                    value={maxLimit}
+                    onChange={(e) => setMaxLimit(sanitizeHours(e.target.value))}
+                    className={`${INPUT_CLS} ${
+                      maxBad || overCeiling
+                        ? "border-error focus:border-error focus:ring-4 focus:ring-errorBg"
+                        : ""
+                    }`}
+                  />
+                </label>
+              </div>
+              {(overCeiling || minBad || maxBad) && (
+                <p className="animate-[badgeIn_0.2s_ease-out_both] text-[11.5px] font-medium text-errorText">
+                  {overCeiling
+                    ? `Cannot exceed the ${ceiling}h rules ceiling — lower the pair to save.`
+                    : pairBad
+                      ? "Minimum limit cannot exceed maximum limit."
+                      : "Hour limits: numbers only — 0.5–45 h/wk, two decimals max."}
+                </p>
+              )}
+              <p className="max-w-[400px] text-[11.5px] leading-snug text-textSecondary">
+                {`Seeded from the DEFAULT rule (${hoursLabel(defaultMin)}–${hoursLabel(
+                  defaultMax
+                )}h) and stored as this lecturer's snapshot — rules card edits never rewrite it, and a saved pair outside the rule's range raises ⚠.`}
+                <span className="mt-1 block font-medium text-textNormal">
+                  Numbers only — 0.5–45 h/wk, two decimals like .00; beyond the {ceiling}h
+                  rules ceiling blocks saving.
+                </span>
+              </p>
+            </div>
+          </Field>
+        </div>
+
+        {/* field-level problems live under their own inputs; server-level
+            errors surface in the DevTools console via the apiClient logger */}
+
+        {/* footer actions */}
+        <div className="mt-lg flex items-center justify-end gap-sm border-t border-divider pt-lg">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="flex h-10 items-center rounded-button border border-divider bg-surface px-lg text-[13px] font-medium text-textNormal transition-colors hover:bg-hoverBg disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            /* stays clickable with field problems — the click triggers the
+               per-field inline warnings; only a network round-trip disables it */
+            disabled={saving}
+            title={
+              limitBlocked
+                ? `Blocked — limit exceeds the ${ceiling}h maximum from the Hour-limit rules`
+                : undefined
+            }
+            className="flex h-10 items-center gap-xs rounded-button bg-primary px-lg text-[13px] font-medium text-white transition-colors hover:bg-primaryHover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving && <Loader2 size={14} className="animate-spin" />}
+            {saving ? "Adding…" : "Add staff"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Delete confirmation — the destructive counterpart to the row actions.
+    Deletion is irreversible, so the dialog restates who is being removed
+    and shows the server's FK verdict inline (staff with linked workloads
+    is refused with a deactivate-instead message). */
+function DeleteStaffDialog({
+  lecturer,
+  onClose,
+  onDeleted,
+}: {
+  lecturer: LecturerRow;
+  onClose: () => void;
+  /** called with the deleted record once the server confirms removal */
+  onDeleted: (deleted: LecturerRow) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /* Escape closes while the dialog is open */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const confirmDelete = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await apiFetch(`/api/lecturers/${lecturer.staffId}`, {
+        method: "DELETE",
+      });
+      const d = (await r.json()) as { ok: boolean; message?: string };
+      if (d.ok) onDeleted(lecturer);
+      else setError(d.message ?? "Could not delete the lecturer.");
+    } catch {
+      setError("Network error while deleting the lecturer.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="animate-[menuIn_0.2s_ease-out_both] max-h-[calc(100vh-64px)] w-full max-w-[440px] overflow-y-auto rounded-card border border-divider bg-surface p-lg shadow-card">
+        {/* title bar */}
+        <div className="flex items-start justify-between gap-md">
+          <div>
+            <h2 className="text-[18px] font-bold leading-[26px] text-text">Delete staff</h2>
+            <p className="mt-[2px] text-[12.5px] text-textSecondary">
+              This action is permanent and cannot be undone.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-button text-textSecondary transition-colors hover:bg-hoverBg hover:text-text"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* identity recap — the requester must see exactly who is removed */}
+        <div className="mt-lg rounded-card border border-divider bg-background p-md">
+          <p className="text-[14px] font-semibold text-text">{lecturer.fullName}</p>
+          <p className="mt-[2px] text-[12.5px] text-textSecondary">
+            {lecturer.staffId} · {lecturer.position ?? "No position"} ·{" "}
+            {EMPLOYMENT_LABEL[lecturer.employmentType]}
+            {lecturer.custom ? " · custom limits" : ""}
+          </p>
+          {lecturer.email && (
+            <p className="mt-[2px] text-[12.5px] text-textSecondary">{lecturer.email}</p>
+          )}
+        </div>
+
+        <p className="mt-md text-[12.5px] leading-snug text-textNormal">
+          The record is immediately removed from the roster. However,{" "}
+          <span className="font-medium text-errorText">
+            staff with assigned workloads or linked records cannot be deleted.
+          </span>{" "}
+          In such cases, the system prevents deletion and requires the staff member to be
+          deactivated instead.
+        </p>
+
+        {/* server-side refusal (FK-locked staff, not found, network) */}
+        {error && (
+          <p className="animate-[badgeIn_0.2s_ease-out_both] mt-md flex items-center gap-xs text-[12.5px] font-medium text-errorText">
+            <TriangleAlert size={13} className="shrink-0" />
+            {error}
+          </p>
+        )}
+
+        {/* footer actions */}
+        <div className="mt-lg flex items-center justify-end gap-sm border-t border-divider pt-lg">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="flex h-10 items-center rounded-button border border-divider bg-surface px-lg text-[13px] font-medium text-textNormal transition-colors hover:bg-hoverBg disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={confirmDelete}
+            disabled={busy}
+            className="flex h-10 items-center gap-xs rounded-button bg-error px-lg text-[13px] font-semibold text-white transition-colors hover:bg-errorText disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            {busy ? "Deleting…" : "Delete staff"}
           </button>
         </div>
       </div>
@@ -1033,15 +1781,55 @@ export default function LecturersPage() {
   const [editing, setEditing] = useState<LecturerRow | null>(null);
   /** bumped after each successful save — refetches + replays the row glide-in */
   const [reloadTick, setReloadTick] = useState(0);
+  /** Add Staff dialog open state (UC_CPM_01 — programme leader creates records) */
+  const [addOpen, setAddOpen] = useState(false);
+  /** staff row queued for deletion — shows the confirm guard */
+  const [deleting, setDeleting] = useState<LecturerRow | null>(null);
   /** ⚠ filter: show only lecturers whose saved limit broke the rule bounds */
   const [warningsOnly, setWarningsOnly] = useState(false);
   /** editable role/course hour-limit rules (workload_rules) */
   const [rules, setRules] = useState<WorkloadRule[]>([]);
   /** toast for limit-exceeded warnings raised by the edit dialog */
   const [limitToast, setLimitToast] = useState<string | null>(null);
+  /** green completion toast (top-center) — fired after a successful delete */
+  const [staffToast, setStaffToast] = useState<string | null>(null);
+
+  /** floating anchor button: roster ⇄ Hour-limit rules card. Fixed to the
+      viewport, so it never scrolls away; mode flips once the card top
+      reaches the viewport (also when the user scrolls there by hand) */
+  const rulesAnchorRef = useRef<HTMLDivElement | null>(null);
+  const [atRules, setAtRules] = useState(false);
+  const navigatingRef = useRef(false);
 
   useEffect(() => {
-    fetch("/api/lecturers")
+    const onScroll = () => {
+      if (navigatingRef.current) return;
+      const el = rulesAnchorRef.current;
+      if (!el) return;
+      setAtRules(el.getBoundingClientRect().top <= 120);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const jumpRulesOrTop = () => {
+    navigatingRef.current = true;
+    setAtRules(!atRules); /* label flips immediately to the destination */
+    if (atRules) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else {
+      rulesAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    /* hold the scroll-driven flips while the smooth navigation settles */
+    window.setTimeout(() => {
+      navigatingRef.current = false;
+    }, 700);
+  };
+
+  useEffect(() => {
+    setError(null);
+    apiFetch("/api/lecturers")
       .then((r) => r.json())
       .then((d) => {
         if (d.ok) {
@@ -1053,7 +1841,11 @@ export default function LecturersPage() {
           setError(d.message ?? "Lecturer directory unavailable.");
         }
       })
-      .catch(() => setError("Lecturer directory unavailable (network error)."));
+      .catch((err: unknown) =>
+        setError(
+          `Lecturer directory unavailable — ${err instanceof Error ? err.message : "network error"}.`
+        )
+      );
   }, [reloadTick]);
 
   /* live filter: classification chip + status + department + free-text search
@@ -1157,6 +1949,11 @@ export default function LecturersPage() {
      replays the row glide-in */
   const listSignature = `${typeFilter}|${statusFilter}|${departmentFilter}|${sortKey}|${query}|${warningsOnly ? "warned" : "all"}|${reloadTick}`;
 
+  /* starter pair for newly created staff — the DEFAULT rule's suggestion
+     (no courses assigned yet at creation time), editable in the dialog */
+  const defaultRule =
+    rules.find((r) => r.basis === "GLOBAL") ?? rules[0] ?? null;
+
   return (
     <div className="mx-auto w-full max-w-[1200px]">
       {/* heading */}
@@ -1169,9 +1966,34 @@ export default function LecturersPage() {
             Staff directory &amp; classifications · {department ?? "loading department…"}
           </p>
         </div>
+        {/* add staff — pinned at the far right of the heading row */}
+        {defaultRule && (
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            title="Add a staff member"
+            className="flex h-11 items-center gap-xs rounded-button bg-primary px-md text-[13px] font-medium text-white shadow-card transition-all hover:bg-primaryHover active:scale-95"
+          >
+            <Plus size={16} />
+            Add Staff
+          </button>
+        )}
       </div>
 
-      {error && <p className="mt-md text-[13px] text-errorText">{error}</p>}
+      {error && (
+        <div className="mt-md flex flex-wrap items-center gap-sm">
+          <p className="text-[13px] text-errorText">{error}</p>
+          {/* one-click recovery from a transient backend outage — bumps
+              reloadTick, which re-runs the roster fetch (no page reload) */}
+          <button
+            type="button"
+            onClick={() => setReloadTick((t) => t + 1)}
+            className="flex h-8 items-center gap-xs rounded-button border border-errorText/30 bg-errorBg px-sm text-[12px] font-medium text-errorText transition-colors hover:border-errorText/60 active:scale-95"
+          >
+            <RefreshCcw size={14} /> Retry
+          </button>
+        </div>
+      )}
 
       {/* filters: classification chips + search (theme 44px input) */}
       <div className="mt-lg flex flex-wrap items-center gap-sm">
@@ -1375,8 +2197,9 @@ export default function LecturersPage() {
               {/* active status */}
               <StatusDot lecturer={l} />
 
-              {/* row action — open the edit dialog (UC_CPM_01) */}
-              <div className="flex w-[88px] items-center">
+              {/* row actions — open the edit dialog, or queue the record
+                  for deletion behind a confirm guard (UC_CPM_01) */}
+              <div className="flex w-[88px] items-center gap-sm">
                 <button
                   type="button"
                   onClick={() => setEditing(l)}
@@ -1385,6 +2208,15 @@ export default function LecturersPage() {
                   className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-primary hover:bg-primaryLight hover:text-primary active:scale-[0.97]"
                 >
                   <Pencil size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleting(l)}
+                  title={`Delete ${l.fullName}`}
+                  aria-label={`Delete ${l.fullName}`}
+                  className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-error hover:bg-errorBg hover:text-errorText active:scale-[0.97]"
+                >
+                  <Trash2 size={14} />
                 </button>
               </div>
             </div>
@@ -1395,14 +2227,16 @@ export default function LecturersPage() {
 
       {/* hour-limit rules editor — role/course-based limits (editable);
           a fresh save also re-resolves the sidebar's ⚠ sum via rail refresh */}
-      <RulesEditor
-        rules={rules}
-        staffCountByRule={staffCountByRule}
-        onSaved={() => {
-          setReloadTick((t) => t + 1);
-          window.dispatchEvent(new Event("tw:rail:refresh"));
-        }}
-      />
+      <div ref={rulesAnchorRef} className="scroll-mt-[88px]">
+        <RulesEditor
+          rules={rules}
+          staffCountByRule={staffCountByRule}
+          onSaved={() => {
+            setReloadTick((t) => t + 1);
+            window.dispatchEvent(new Event("tw:rail:refresh"));
+          }}
+        />
+      </div>
 
       <p className="mt-md text-[12px] text-textSecondary">
         {counts
@@ -1430,8 +2264,54 @@ export default function LecturersPage() {
         />
       )}
 
+      {/* add-staff dialog (UC_CPM_01) — creation form with position select */}
+      {addOpen && defaultRule && (
+        <AddStaffDialog
+          defaultMin={defaultRule.minHours}
+          defaultMax={defaultRule.maxHours}
+          existingStaffIds={lecturers.map((l) => l.staffId)}
+          ceiling={limitCeiling}
+          onClose={() => setAddOpen(false)}
+          onSaved={() => {
+            setAddOpen(false);
+            setReloadTick((t) => t + 1);
+            window.dispatchEvent(new Event("tw:rail:refresh"));
+          }}
+        />
+      )}
+
+      {/* deletion confirm dialog — destructive guard for row removal */}
+      {deleting && (
+        <DeleteStaffDialog
+          lecturer={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={(deleted) => {
+            setDeleting(null);
+            setReloadTick((t) => t + 1);
+            window.dispatchEvent(new Event("tw:rail:refresh"));
+            setStaffToast(
+              `The staff member ${deleted.fullName} (${deleted.staffId}) has been deleted successfully.`
+            );
+          }}
+        />
+      )}
+
       {/* exceed toast — after the dialog in the DOM so it paints above its backdrop */}
+      {/* floating anchor button — pinned to the viewport's bottom-right,
+          never scrolls with the page; #0071E3 primary button that jumps to
+          the Hour-limit rules card, flipping to "back to top" after arrival */}
+      <button
+        type="button"
+        onClick={jumpRulesOrTop}
+        title={atRules ? "Back to the lecturers roster" : "Jump to the Hour-limit rules"}
+        className="fixed bottom-6 right-6 z-40 flex h-11 items-center gap-xs rounded-button bg-primary px-md text-[13px] font-medium text-white shadow-card transition-all hover:bg-primaryHover hover:-translate-y-[1px] active:scale-95 animate-[badgeIn_0.3s_ease-out_both]"
+      >
+        {atRules ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
+        {atRules ? "Back to top" : "Hour-limit rules"}
+      </button>
+
       <Toast message={limitToast} onDone={() => setLimitToast(null)} />
+      <Toast tone="success" message={staffToast} onDone={() => setStaffToast(null)} />
     </div>
   );
 }

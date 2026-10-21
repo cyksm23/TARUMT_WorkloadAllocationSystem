@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { apiFetch } from "@/services/apiClient";
 import {
   ClipboardList,
   Clock,
@@ -137,7 +138,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setName(getAuth()?.user.fullName ?? "Programme Leader");
-    fetch("/api/dashboard/summary")
+    apiFetch("/api/dashboard/summary")
       .then((r) => r.json())
       .then((d) => {
         if (d.ok) setSummary(d as Summary);

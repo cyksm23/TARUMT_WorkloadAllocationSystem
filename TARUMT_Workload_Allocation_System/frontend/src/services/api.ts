@@ -1,4 +1,4 @@
-/** Typed fetch wrapper for the PHP API (and the Python engine). */
+/** Typed fetch wrapper for the Express API (and the Python engine). */
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 const PYTHON_URL = process.env.NEXT_PUBLIC_PYTHON_API_URL ?? "http://localhost:8001/api";

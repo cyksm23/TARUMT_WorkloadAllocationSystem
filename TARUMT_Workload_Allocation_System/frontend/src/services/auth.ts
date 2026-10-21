@@ -2,8 +2,8 @@
  * Auth service — manages the login flow from the client side.
  *
  * Order of preference:
- *   1. PHP API         `${NEXT_PUBLIC_API_URL}/auth/login`  (core service)
- *   2. Next.js route   `/api/auth/login`                    (same Postgres, dev fallback)
+ *   1. Express REST API  `${NEXT_PUBLIC_API_URL}/auth/login`  (backend-express, port 8000)
+ *   2. Next.js route     `/api/auth/login`                    (same Postgres, dev fallback)
  */
 import type { User } from "@/types";
 
@@ -20,7 +20,7 @@ export interface AuthUser extends Pick<User, "id" | "username" | "email" | "role
 export interface AuthSession {
   token: string;
   expires: number;
-  source: "php-api" | "database" | "dev-fallback";
+  source: "database" | "dev-fallback";
   user: AuthUser;
 }
 
@@ -89,16 +89,16 @@ export class LoginError extends Error {
 /** Verifies a 4-digit lecturer code + password. Throws LoginError on failure. */
 export async function login(code: string, password: string): Promise<AuthSession> {
   const payload = { code, password };
-  const phpBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
-  /* 1 ── PHP core API ─────────────────────────────────────────────────────── */
-  const php = await postJson(`${phpBase}/auth/login`, payload);
-  if (php.status === 200 && isSession(php.data)) return php.data;
-  if (php.status >= 400 && php.status < 500) {
-    const d = php.data as { message?: string };
+  /* 1 ── Express core API (backend-express) ───────────────────────────────── */
+  const api = await postJson(`${apiBase}/auth/login`, payload);
+  if (api.status === 200 && isSession(api.data)) return api.data;
+  if (api.status >= 400 && api.status < 500) {
+    const d = api.data as { message?: string };
     throw new LoginError(d.message ?? "Invalid Staff ID or password.", "invalid");
   }
-  // status 0 (PHP not running) or 5xx (e.g. DB not reachable / pdo_pgsql off)
+  // status 0 (backend not running) or 5xx (e.g. DB not reachable)
   //  → continue to the Next.js route handler.
 
   /* 2 ── Next.js route handler (same Postgres, dev fallback) ──────────────── */
