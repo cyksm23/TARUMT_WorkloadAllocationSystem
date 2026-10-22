@@ -32,11 +32,12 @@ INSERT INTO academic_years (year_code, start_date, end_date, is_active) VALUES
  ('2025/2026','2025-06-23','2026-04-19', TRUE);
 
 -- Semesters -------------------------------------------------
+-- Exactly 3 static TARUMT semesters (the course catalogue's universe):
+--   S1 = 14 weeks (active) · S2 = 7 weeks · S3 = 14 weeks.
 INSERT INTO semesters (academic_year_id, semester_name, semester_code, start_date, end_date, week_count, is_active) VALUES
- ((SELECT id FROM academic_years WHERE year_code='2024/2025'),'Semester 1','S1','2024-06-24','2024-10-27',14,FALSE),
- ((SELECT id FROM academic_years WHERE year_code='2024/2025'),'Semester 2','S2','2024-12-02','2025-04-20',14,FALSE),
  ((SELECT id FROM academic_years WHERE year_code='2025/2026'),'Semester 1','S1','2025-06-23','2025-10-26',14,TRUE),
- ((SELECT id FROM academic_years WHERE year_code='2025/2026'),'Semester 2','S2','2025-12-01','2026-04-19',14,FALSE);
+ ((SELECT id FROM academic_years WHERE year_code='2025/2026'),'Semester 2','S2','2025-12-01','2026-01-18',7,FALSE),
+ ((SELECT id FROM academic_years WHERE year_code='2025/2026'),'Semester 3','S3','2026-04-26','2026-08-02',14,FALSE);
 
 -- ============================================================
 -- USERS  (id 1..19 = lecturers, id 20 = admin)
@@ -97,15 +98,23 @@ INSERT INTO lecturers (staff_id, user_id, department_id, full_name, email, posit
 -- SUBJECTS (sample from the teaching workload sheet)
 -- ============================================================
 INSERT INTO subjects (subject_code, subject_name, programme_id, semester_id, credit_hours, lecture_hours, tutorial_hours, practical_hours, total_hours, student_count, group_count) VALUES
- ('AACS2204','Object-Oriented Programming Techniques',  (SELECT id FROM programmes WHERE programme_code='DSF'),(SELECT id FROM semesters WHERE semester_code='S1' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2025/2026')),4.0,2.0,1.0,2.0,5.0,120,6),
- ('AACS3013','Database Development and Applications',   (SELECT id FROM programmes WHERE programme_code='DSF'),(SELECT id FROM semesters WHERE semester_code='S1' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2025/2026')),3.0,2.0,1.0,1.0,4.0,80 ,4),
- ('AACS2034','Fundamentals of Computer Networks',       (SELECT id FROM programmes WHERE programme_code='DFT'),(SELECT id FROM semesters WHERE semester_code='S2' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2024/2025')),4.0,2.0,1.0,2.0,5.0,90 ,5),
- ('AAMS3184','Discrete Mathematics',                    (SELECT id FROM programmes WHERE programme_code='DFT'),(SELECT id FROM semesters WHERE semester_code='S2' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2024/2025')),4.0,3.0,1.5,0.0,4.5,60 ,4),
- ('AMIT2043','Web Systems and Technologies',            (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S2' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2024/2025')),3.0,2.0,0.0,2.0,4.0,45 ,3),
- ('BACS1053','Database Management',                     (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S1' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2025/2026')),3.0,2.0,1.0,1.0,4.0,40 ,2),
- ('BAIT2073','Mobile Application Development',          (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S1' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2025/2026')),3.0,2.0,0.0,2.0,4.0,35 ,2),
- ('BMIT3084','Enterprise Networking',                   (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S2' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2024/2025')),4.0,2.0,1.0,2.0,5.0,30 ,2),
- ('AACS1013','Information Technology',                  (SELECT id FROM programmes WHERE programme_code='DFT'),(SELECT id FROM semesters WHERE semester_code='S1' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2025/2026')),3.0,2.0,0.0,1.0,3.0,150,8),
- ('BACS3063','Software Engineering Practices',          (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S2' AND academic_year_id=(SELECT id FROM academic_years WHERE year_code='2024/2025')),3.0,2.0,1.0,1.0,4.0,50 ,3);
+ ('AACS2204','Object-Oriented Programming Techniques',  (SELECT id FROM programmes WHERE programme_code='DSF'),(SELECT id FROM semesters WHERE semester_code='S1'),4.0,2.0,1.0,2.0,5.0,120,6),
+ ('AACS3013','Database Development and Applications',   (SELECT id FROM programmes WHERE programme_code='DSF'),(SELECT id FROM semesters WHERE semester_code='S1'),3.0,2.0,1.0,1.0,4.0,80 ,4),
+ ('AACS2034','Fundamentals of Computer Networks',       (SELECT id FROM programmes WHERE programme_code='DFT'),(SELECT id FROM semesters WHERE semester_code='S2'),4.0,2.0,1.0,2.0,5.0,90 ,5),
+ ('AAMS3184','Discrete Mathematics',                    (SELECT id FROM programmes WHERE programme_code='DFT'),(SELECT id FROM semesters WHERE semester_code='S2'),4.0,3.0,1.5,0.0,4.5,60 ,4),
+ ('AMIT2043','Web Systems and Technologies',            (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S2'),3.0,2.0,0.0,2.0,4.0,45 ,3),
+ ('BACS1053','Database Management',                     (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S1'),3.0,2.0,1.0,1.0,4.0,40 ,2),
+ ('BAIT2073','Mobile Application Development',          (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S1'),3.0,2.0,0.0,2.0,4.0,35 ,2),
+ ('BMIT3084','Enterprise Networking',                   (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S2'),4.0,2.0,1.0,2.0,5.0,30 ,2),
+ ('AACS1013','Information Technology',                  (SELECT id FROM programmes WHERE programme_code='DFT'),(SELECT id FROM semesters WHERE semester_code='S1'),3.0,2.0,0.0,1.0,3.0,150,8),
+ ('BACS3063','Software Engineering Practices',          (SELECT id FROM programmes WHERE programme_code='RSD'),(SELECT id FROM semesters WHERE semester_code='S2'),3.0,2.0,1.0,1.0,4.0,50 ,3);
+
+-- Class-size rules --------------------------------------------
+-- Flexible tutorial / practical class limits (editable by the PL).
+-- A class exceeding the limit splits into groups.
+INSERT INTO class_size_rules (class_type, limit_students) VALUES
+ ('TUTORIAL',36),
+ ('PRACTICAL',28)
+ON CONFLICT (class_type) DO NOTHING;
 
 COMMIT;

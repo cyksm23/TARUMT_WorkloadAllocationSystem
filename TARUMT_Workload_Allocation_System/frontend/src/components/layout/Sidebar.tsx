@@ -23,8 +23,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import Image from "next/image";
 import { useEffect, useState } from "react";
-import { Menu, GraduationCap, TriangleAlert } from "lucide-react";
+import { Menu, TriangleAlert } from "lucide-react";
 import { NAV_ITEMS, isActive, type LucideIcon, type RailCounts } from "@/config/nav";
 
 /** spring used by the toast slide-down — the project's motion signature */
@@ -152,9 +153,15 @@ export default function Sidebar({ expanded, onToggle, counts }: SidebarProps) {
             style={{ animationDelay: "70ms" }}
             className="animate-[labelIn_0.32s_ease-out_both] flex min-w-0 items-center gap-sm pl-sm"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-badge bg-surface">
-              <GraduationCap size={18} className="text-primary" />
-            </span>
+            {/* brand crest — the same transparent PNG the browser tab uses */}
+            <Image
+              src="/icon.png"
+              alt="TAR UMT crest"
+              width={36}
+              height={36}
+              priority
+              className="h-9 w-9 shrink-0 object-contain"
+            />
             <span className="flex min-w-0 flex-col leading-[1.15]">
               <span className="whitespace-nowrap text-[15px] font-extrabold leading-[1.1] tracking-[0.01em]">
                 <span className="text-[#DA2A30]">TAR</span>

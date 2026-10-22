@@ -1,8 +1,11 @@
 import "dotenv/config";
 import express from "express";
 import authRouter from "./routes/auth";
+import classSizesRouter from "./routes/class-sizes";
+import coursesRouter from "./routes/courses";
 import dashboardRouter from "./routes/dashboard";
 import lecturersRouter from "./routes/lecturers";
+import programmesRouter from "./routes/programmes";
 import rulesRouter from "./routes/rules";
 
 /**
@@ -24,7 +27,7 @@ app.use((req, res, next) => {
     res.setHeader("Vary", "Origin");
   }
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     return res.status(204).end();
   }
@@ -40,8 +43,11 @@ app.get("/api/health", (_req, res) => {
 
 /* ── feature routes (ported 1:1 from the Next.js route handlers) ─────────── */
 app.use("/api/auth", authRouter);
+app.use("/api/class-size-rules", classSizesRouter);
+app.use("/api/courses", coursesRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/lecturers", lecturersRouter);
+app.use("/api/programmes", programmesRouter);
 app.use("/api/workload-rules", rulesRouter);
 
 /* ── error guard: bad JSON → 400, anything else → 500 ────────────────────── */

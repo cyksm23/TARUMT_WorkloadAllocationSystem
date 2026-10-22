@@ -111,6 +111,8 @@ CREATE TABLE subjects (
     tutorial_hours  NUMERIC(4,1) DEFAULT 1.0,
     practical_hours NUMERIC(4,1) DEFAULT 0.0,
     total_hours     NUMERIC(4,1) DEFAULT 3.0,
+    tutorial_students  INTEGER     NULL,      -- headcount in tutorial classes
+    practical_students INTEGER     NULL,      -- headcount in practical classes
     student_count   INTEGER      DEFAULT 0,
     group_count     INTEGER      DEFAULT 1,
     is_active       BOOLEAN      DEFAULT TRUE,
@@ -177,6 +179,20 @@ CREATE TABLE workload_rules (
     max_hours  NUMERIC(5,2) NOT NULL,
     updated_at TIMESTAMP    DEFAULT NOW(),
     CONSTRAINT ck_rule_range CHECK (min_hours <= max_hours)
+);
+
+-- 12) class_size_rules ---------------------------------------
+-- Flexible class-size limits (editable by the PL). A TUTORIAL / PRACTICAL
+-- class whose headcount exceeds the limit splits into groups; the course
+-- dialog derives the group count from these rules at any time.
+CREATE TABLE class_size_rules (
+    class_type     TEXT PRIMARY KEY,
+        CHECK (class_type IN ('TUTORIAL','PRACTICAL')),
+    limit_students INTEGER NOT NULL,
+        CHECK (limit_students > 0 AND limit_students <= 500),
+    is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 INSERT INTO workload_rules (rule_key, label, basis, priority, min_hours, max_hours) VALUES
