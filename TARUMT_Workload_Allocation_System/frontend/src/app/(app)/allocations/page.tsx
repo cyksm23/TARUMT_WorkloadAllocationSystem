@@ -34,10 +34,10 @@ import {
   Check,
   ChevronDown,
   ClipboardList,
+  Eye,
   Loader2,
   Pencil,
   RefreshCcw,
-  Search,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -66,6 +66,14 @@ interface CourseRow {
 interface ProgrammeOption {
   code: string;
   name: string;
+}
+
+/** every coded term of every academic year — GET /api/courses
+    academicYears payload (all 6 seeded terms, not just terms with courses) */
+interface AcademicYearTerm {
+  id: number;
+  label: string;
+  yearCode: string;
 }
 
 /** staff rows served by GET /api/lecturers (subset used here) */
@@ -131,9 +139,12 @@ type SlotKey = (typeof SLOTS)[number]["key"];
 
 /* shared table-grid template — the header and EVERY row reuse the same
    column recipe so cells align; long text wraps inside its own column and
-   narrower windows scroll the table horizontally instead of squeezing it */
+   narrower windows scroll the table horizontally instead of squeezing it.
+   Academic Year, Hours (L · T · P) and Students moved into the per-row
+   Details dialog — 5 columns: identity / programme / lecturer / details /
+   actions */
 const ROSTER_GRID =
-  "grid grid-cols-[2.2fr_1.5fr_1fr_1fr_0.9fr_1.15fr_104px] items-center gap-x-md";
+  "grid grid-cols-[2.6fr_1.8fr_1.6fr_64px_104px] items-center gap-x-md";
 
 /* ── themed controls (same look as the module rosters) ───────────────────── */
 
@@ -344,6 +355,105 @@ function TriageChip({
 }
 
 /* ── assign dialog ───────────────────────────────────────────────────────── */
+
+/* ── COURSE DETAILS ─────────────────────────────────────────────────────── */
+
+/** Read-only detail dialog — Academic Year, Hours (L · T · P) and Students
+    live here instead of table columns, keeping the assignment roster lean */
+function CourseDetailDialog({
+  course,
+  onClose,
+}: {
+  course: CourseRow;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="animate-[menuIn_0.2s_ease-out_both] max-h-[calc(100vh-64px)] w-full max-w-[440px] overflow-y-auto rounded-card border border-divider bg-surface p-lg shadow-card">
+        {/* title bar */}
+        <div className="flex items-start justify-between gap-md">
+          <div>
+            <h2 className="text-[18px] font-bold leading-[26px] text-text">
+              <span className="text-primary">{course.subjectCode}</span> details
+            </h2>
+            <p className="mt-[2px] text-[12.5px] text-textSecondary">
+              {course.subjectName}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-button text-textSecondary transition-colors hover:bg-hoverBg hover:text-text"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="mt-lg flex flex-col gap-md">
+          <div className="rounded-card border border-divider bg-background p-md">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
+              Academic Year
+            </p>
+            <p className="mt-[2px] text-[13.5px] font-medium text-text">
+              {course.academicYearLabel}
+            </p>
+          </div>
+
+          <div className="rounded-card border border-divider bg-background p-md">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
+              Hours (L · T · P)
+            </p>
+            <p className="mt-[2px] text-[13.5px] font-medium text-text">
+              {course.lectureHours} · {course.tutorialHours} · {course.practicalHours}
+              <span className="text-[12px] font-normal text-textSecondary"> per week</span>
+            </p>
+            <p className="text-[12px] text-textSecondary">
+              {course.totalHours} total credit hour
+              {Number(course.totalHours) === 1 ? "" : "s"}
+            </p>
+          </div>
+
+          <div className="rounded-card border border-divider bg-background p-md">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
+              Students
+            </p>
+            <p className="mt-[2px] text-[13.5px] font-medium text-text">
+              {course.studentCount} in {course.groupCount} group
+              {course.groupCount === 1 ? "" : "s"}
+            </p>
+            <p className="text-[12px] text-textSecondary">
+              Per-class sizes live in Courses &amp; Programmes (Edit course).
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-lg flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 items-center rounded-button bg-primary px-lg text-[13px] font-semibold text-white transition-colors hover:bg-primaryHover active:bg-primaryActive"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Assign dialog with two modes driven by the course's assignment state:
@@ -633,14 +743,16 @@ export default function AllocationsPage() {
   const [assignments, setAssignments] = useState<Record<string, SlotAssignment>>({});
   /* the course whose assign/edit dialog is open */
   const [assigning, setAssigning] = useState<CourseRow | null>(null);
+  const [detailCourse, setDetailCourse] = useState<CourseRow | null>(null);
   /* green completion toast (top-center) */
   const [itemToast, setItemToast] = useState<string | null>(null);
 
   /* filters */
   const [status, setStatus] = useState<Triage>("all");
   const [programme, setProgramme] = useState("all");
+  const [academicYears, setAcademicYears] = useState<AcademicYearTerm[]>([]);
+  const [academicYear, setAcademicYear] = useState("all");
   const [sort, setSort] = useState<SortKey>("code_asc");
-  const [query, setQuery] = useState("");
 
   /* load the course directory (same payload the Courses module serves) plus
      the staff directory and the persisted slot assignments */
@@ -661,6 +773,7 @@ export default function AllocationsPage() {
       if (c && c.ok) {
         setCourses(c.courses as CourseRow[]);
         setProgrammeOptions((c.programmes ?? []) as ProgrammeOption[]);
+        setAcademicYears((c.academicYears ?? []) as AcademicYearTerm[]);
       } else {
         failed = true;
       }
@@ -738,21 +851,16 @@ export default function AllocationsPage() {
     }
   };
 
-  /* live course filter: status chip + programme + search */
+  /* live course filter: status chip + academic year + programme */
   const matchedCourses = useMemo(() => {
-    const q = query.trim().toLowerCase();
     return courses.filter((c) => {
       if (status === "active" && !c.isActive) return false;
       if (status === "inactive" && c.isActive) return false;
       if (programme !== "all" && c.programmeCode !== programme) return false;
-      if (!q) return true;
-      return (
-        c.subjectName.toLowerCase().includes(q) ||
-        c.subjectCode.toLowerCase().includes(q) ||
-        (c.programmeName ?? "").toLowerCase().includes(q)
-      );
+      if (academicYear !== "all" && String(c.academicYearId) !== academicYear) return false;
+      return true;
     });
-  }, [courses, query, programme, status]);
+  }, [courses, academicYear, programme, status]);
 
   const sortedCourses = useMemo(
     () => [...matchedCourses].sort(SORTERS[sort]),
@@ -777,9 +885,21 @@ export default function AllocationsPage() {
     return map;
   }, [lecturers]);
 
-  /* remount key — every filter/sort/search change (and each reload) replays
+  /* academic-year filter options — EVERY coded term in the database
+     (even terms without courses yet), shown in the roster's own
+     "term code · AY year" wording, in year order (SQL pre-sorted) */
+  const academicYearOptions = useMemo(
+    () =>
+      academicYears.map((t) => ({
+        id: String(t.id),
+        display: `${t.label.split(" · ")[0]} · AY ${t.yearCode}`,
+      })),
+    [academicYears],
+  );
+
+  /* remount key — every filter/sort change (and each reload) replays
      the row glide-in */
-  const listSignature = `${status}|${programme}|${sort}|${query}|${reloadTick}`;
+  const listSignature = `${status}|${programme}|${academicYear}|${sort}|${reloadTick}`;
 
   return (
     <div className="mx-auto w-full max-w-[1200px]">
@@ -835,6 +955,18 @@ export default function AllocationsPage() {
             dropdown menus' z-index behind the rows below */}
         <div className="animate-[rowIn_0.26s_ease-out_0.18s_both] relative z-20 ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
           <FilterSelect
+            ariaLabel="Filter by academic year"
+            value={academicYear}
+            onChange={setAcademicYear}
+          >
+            <option value="all">All academic years</option>
+            {academicYearOptions.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.display}
+              </option>
+            ))}
+          </FilterSelect>
+          <FilterSelect
             ariaLabel="Filter by programme"
             value={programme}
             onChange={setProgramme}
@@ -859,19 +991,6 @@ export default function AllocationsPage() {
             <option value="hours_desc">Sort: Total hours → high</option>
             <option value="students_desc">Sort: Students → many</option>
           </FilterSelect>
-          <div className="relative w-full sm:w-[260px]">
-            <Search
-              size={16}
-              className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
-            />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search code, name, programme…"
-              className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
-            />
-          </div>
         </div>
       </div>
 
@@ -880,7 +999,7 @@ export default function AllocationsPage() {
         {/* shared grid table — the header and every row reuse the same column
             recipe; narrower windows scroll instead of squeezing columns */}
         <div className="overflow-x-auto">
-          <div className="min-w-[1100px]">
+          <div className="min-w-[800px]">
             {/* header — identical grid template as the rows below */}
             <div className={`${ROSTER_GRID} border-b border-divider px-lg py-sm`}>
               <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
@@ -890,16 +1009,10 @@ export default function AllocationsPage() {
                 Programme
               </p>
               <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                Academic Year
-              </p>
-              <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                Hours (L · T · P)
-              </p>
-              <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                Students
-              </p>
-              <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                 Lecturer
+              </p>
+              <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
+                Details
               </p>
               <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                 Actions
@@ -918,7 +1031,7 @@ export default function AllocationsPage() {
                 <div className="animate-[rowIn_0.26s_ease-out_both] px-lg py-xl text-center">
                   <p className="text-[14px] font-medium text-textNormal">No course found</p>
                   <p className="mt-1 text-[12.5px] text-textSecondary">
-                    No course matches “{query.trim()}” with the selected filters.
+                    No course matches the selected filters.
                   </p>
                 </div>
               ) : (
@@ -956,30 +1069,8 @@ export default function AllocationsPage() {
                         )}
                       </p>
 
-                      {/* academic year */}
-                      <p className="min-w-0 text-[12.5px] leading-snug text-textNormal">
-                        {c.academicYearLabel}
-                      </p>
-
-                      {/* hours */}
-                      <div className="min-w-0">
-                        <p className="text-[12.5px] font-medium text-text">
-                          {c.lectureHours} · {c.tutorialHours} · {c.practicalHours}
-                        </p>
-                        <p className="text-[11.5px] leading-snug text-textSecondary">
-                          lecture · tut · prac / wk
-                        </p>
-                      </div>
-
-                      {/* students/groups */}
-                      <div className="min-w-0">
-                        <p className="text-[12.5px] font-medium text-text">
-                          {c.studentCount}
-                        </p>
-                        <p className="text-[11.5px] leading-snug text-textSecondary">
-                          in {c.groupCount} group{c.groupCount === 1 ? "" : "s"}
-                        </p>
-                      </div>
+                      {/* academic year / hours / students live in the
+                          Details dialog (eye button) — not table columns */}
 
                       {/* lecturers — one name when every slot shares the same
                           lecturer, an L/T/P breakdown once slots are split */}
@@ -1021,6 +1112,20 @@ export default function AllocationsPage() {
                         )}
                       </div>
 
+                      {/* details — opens the read-only course detail dialog
+                          (Academic Year / Hours / Students) */}
+                      <div className="flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => setDetailCourse(c)}
+                          title={`View ${c.subjectCode} details`}
+                          aria-label={`View ${c.subjectCode} details`}
+                          className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-primary hover:bg-primaryLight hover:text-primary active:scale-[0.97]"
+                        >
+                          <Eye size={14} />
+                        </button>
+                      </div>
+
                       {/* action: assign (none) or edit (already assigned) */}
                       <div className="flex items-center">
                         <button
@@ -1055,6 +1160,12 @@ export default function AllocationsPage() {
           onClose={() => setAssigning(null)}
           onCommit={(slots) => commitAssignment(assigning, slots)}
           onClear={() => clearAssignment(assigning)}
+        />
+      )}
+      {detailCourse && (
+        <CourseDetailDialog
+          course={detailCourse}
+          onClose={() => setDetailCourse(null)}
         />
       )}
 
