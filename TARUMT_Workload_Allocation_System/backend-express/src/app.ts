@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import allocationsRouter from "./routes/allocations";
 import authRouter from "./routes/auth";
 import classSizesRouter from "./routes/class-sizes";
 import coursesRouter from "./routes/courses";
@@ -43,6 +44,7 @@ app.get("/api/health", (_req, res) => {
 
 /* ── feature routes (ported 1:1 from the Next.js route handlers) ─────────── */
 app.use("/api/auth", authRouter);
+app.use("/api/allocations", allocationsRouter);
 app.use("/api/class-size-rules", classSizesRouter);
 app.use("/api/courses", coursesRouter);
 app.use("/api/dashboard", dashboardRouter);

@@ -2441,7 +2441,7 @@ export default function CoursesPage() {
             active={courseStatus === "inactive"}
             onClick={() => setCourseStatus("inactive")}
           />
-          <div className="animate-[rowIn_0.26s_ease-out_0.18s_both] ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
+          <div className="animate-[rowIn_0.26s_ease-out_0.18s_both] relative z-20 ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
             <FilterSelect
               ariaLabel="Filter by programme"
               value={courseProgramme}
@@ -2505,7 +2505,7 @@ export default function CoursesPage() {
             active={progStatus === "inactive"}
             onClick={() => setProgStatus("inactive")}
           />
-          <div className="animate-[rowIn_0.26s_ease-out_0.18s_both] ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
+          <div className="animate-[rowIn_0.26s_ease-out_0.18s_both] relative z-20 ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
             <FilterSelect ariaLabel="Filter by level" value={progLevel} onChange={setProgLevel}>
               <option value="all">All levels</option>
               {LEVELS.map((l) => (
