@@ -1,5 +1,5 @@
 /**
- * GET    /api/courses        — subject directory joined with programme + semester.
+ * GET    /api/courses        — subject directory joined with programme + academic year.
  * POST   /api/courses        — create a course (UC_CPM_01).
  * PATCH  /api/courses/:code  — maintain course details (code immutable).
  * DELETE /api/courses/:code  — remove a course; refused while workload details
@@ -18,15 +18,22 @@ const router = Router();
 
 router.get("/", async (_req: Request, res: Response) => {
   try {
+    /* future academic years provision themselves ahead of time — while the
+       last seeded intake ends within ~6 months, the next academic year and
+       its three coded terms (e.g. 2028 → 202805 / 202809 / 202901) appear */
+    const provisioned = await getPool().query("SELECT ensure_academic_year_horizon() AS created");
+    const createdCount = Number(provisioned.rows[0]?.created ?? 0);
+    if (createdCount > 0) {
+      console.log(`ensure_academic_year_horizon: auto-created ${createdCount} academic year(s)`);
+    }
     const { rows } = await getPool().query(`
       SELECT s.subject_code                         AS "subjectCode",
              s.subject_name                         AS "subjectName",
              p.programme_code                       AS "programmeCode",
              COALESCE(p.programme_name, '—')        AS "programmeName",
-             s.semester_id                          AS "semesterId",
-             COALESCE(sy.semester_code || ' · ' || sy.semester_name
-               || ' · ' || sy.week_count || ' weeks', '—')
-                                                    AS "semesterLabel",
+             s.academic_year_id                     AS "academicYearId",
+             COALESCE(t.term_code || ' · AY ' || ay.year_code, '—')
+                                                    AS "academicYearLabel",
              s.credit_hours                         AS "creditHours",
              s.lecture_hours                        AS "lectureHours",
              s.tutorial_hours                       AS "tutorialHours",
@@ -39,7 +46,8 @@ router.get("/", async (_req: Request, res: Response) => {
              s.is_active                            AS "isActive"
         FROM subjects s
         LEFT JOIN programmes p ON p.id = s.programme_id
-        LEFT JOIN semesters sy ON sy.id = s.semester_id
+        LEFT JOIN academic_year_terms t ON t.id = s.academic_year_id
+        LEFT JOIN academic_years ay ON ay.id = t.academic_year_id
        ORDER BY s.subject_code
     `);
     const { rows: programmes } = await getPool().query(`
@@ -48,17 +56,15 @@ router.get("/", async (_req: Request, res: Response) => {
        WHERE p.is_active
        ORDER BY p.programme_code
     `);
-    /* one canonical row per semester code (the three TARUMT semesters
-       S1 / S2 / S3 exist once per academic year — dedupe to the earliest
-       year's row so the picker shows exactly 3 options); labels mention
-       the week count (S1 14 wks · S2 7 wks · S3 14 wks) */
-    const { rows: semesters } = await getPool().query(`
-      SELECT DISTINCT ON (semester_code)
-             id,
-             semester_code || ' · ' || semester_name
-               || ' · ' || week_count || ' weeks' AS label
-        FROM semesters
-       ORDER BY semester_code, id
+    /* every coded term of every academic year (202605 · May 2026, 202609
+       · September 2026, …) — the picker groups them under their year */
+    const { rows: academicYears } = await getPool().query(`
+      SELECT t.id,
+             t.term_code || ' · ' || t.term_name AS label,
+             ay.year_code                        AS "yearCode"
+        FROM academic_year_terms t
+        JOIN academic_years ay ON ay.id = t.academic_year_id
+       ORDER BY ay.year_code, t.term_code
     `);
     /* flexible class-size limits — the course dialog derives group splits
        from these (Tutorial / Practical) */
@@ -68,7 +74,7 @@ router.get("/", async (_req: Request, res: Response) => {
        WHERE is_active
        ORDER BY class_type
     `);
-    return res.json({ ok: true, courses: rows, programmes, semesters, classSizeRules });
+    return res.json({ ok: true, courses: rows, programmes, academicYears, classSizeRules });
   } catch (err) {
     console.error("GET /api/courses failed:", err);
     return res.status(500).json({ ok: false, message: "Course directory unavailable." });
@@ -100,15 +106,15 @@ router.post("/", async (req: Request, res: Response) => {
     return res.status(400).json({ ok: false, message: "Course name is required." });
   }
 
-  /* programme + semester references */
+  /* programme + academic year references */
   const programmeCode =
     typeof body.programmeCode === "string" ? body.programmeCode.trim().toUpperCase() : "";
   if (!programmeCode) {
     return res.status(400).json({ ok: false, message: "Programme is required." });
   }
-  const semesterId = Number(body.semesterId);
-  if (!Number.isInteger(semesterId) || semesterId <= 0) {
-    return res.status(400).json({ ok: false, message: "Semester is required." });
+  const academicYearId = Number(body.academicYearId);
+  if (!Number.isInteger(academicYearId) || academicYearId <= 0) {
+    return res.status(400).json({ ok: false, message: "Academic year is required." });
   }
 
   /* hour components — one decimal place max, non-negative */
@@ -179,14 +185,17 @@ router.post("/", async (req: Request, res: Response) => {
     if (!prog) {
       return res.status(400).json({ ok: false, message: `Unknown programme "${programmeCode}".` });
     }
-    const semRows = await getPool().query("SELECT id FROM semesters WHERE id = $1 LIMIT 1", [semesterId]);
+    const semRows = await getPool().query(
+      "SELECT id FROM academic_year_terms WHERE id = $1 LIMIT 1",
+      [academicYearId],
+    );
     if (semRows.rows.length === 0) {
-      return res.status(400).json({ ok: false, message: "Unknown semester." });
+      return res.status(400).json({ ok: false, message: "Unknown academic year." });
     }
 
     const insert = await getPool().query(
       `INSERT INTO subjects
-         (subject_code, subject_name, programme_id, semester_id,
+         (subject_code, subject_name, programme_id, academic_year_id,
           credit_hours, lecture_hours, tutorial_hours, practical_hours, total_hours,
           tutorial_students, practical_students, student_count, group_count, is_active)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -195,7 +204,7 @@ router.post("/", async (req: Request, res: Response) => {
         code,
         name,
         prog.id,
-        semesterId,
+        academicYearId,
         Math.round((body.creditHours === undefined ? 3 : Number(body.creditHours)) * 10) / 10,
         hours.lecture,
         hours.tutorial,
@@ -221,7 +230,7 @@ router.post("/", async (req: Request, res: Response) => {
     if ((err as { code?: string }).code === "23503") {
       return res
         .status(400)
-        .json({ ok: false, message: "Unknown programme or semester reference." });
+        .json({ ok: false, message: "Unknown programme or academic year reference." });
     }
     console.error("POST /api/courses failed:", err);
     return res.status(500).json({ ok: false, message: "Database error while adding the course." });
@@ -291,7 +300,7 @@ router.patch("/:code", async (req: Request, res: Response) => {
   const sets: string[] = [];
   const params: unknown[] = [];
   let programmeCode: string | null = null;
-  let semesterId: number | null = null;
+  let academicYearId: number | null = null;
 
   for (const field of COURSE_COLUMNS) {
     if (!(field.key in body)) continue;
@@ -303,14 +312,14 @@ router.patch("/:code", async (req: Request, res: Response) => {
   if (typeof body.programmeCode === "string" && body.programmeCode.trim()) {
     programmeCode = body.programmeCode.trim().toUpperCase();
   }
-  if (Number.isInteger(Number(body.semesterId)) && Number(body.semesterId) > 0) {
-    semesterId = Number(body.semesterId);
+  if (Number.isInteger(Number(body.academicYearId)) && Number(body.academicYearId) > 0) {
+    academicYearId = Number(body.academicYearId);
   }
 
   /* recompute total from the FINAL set of components when any hour changed */
   const hoursTouched = ["lectureHours", "tutorialHours", "practicalHours"].some((k) => k in body);
 
-  if (sets.length === 0 && !programmeCode && semesterId === null) {
+  if (sets.length === 0 && !programmeCode && academicYearId === null) {
     return res.status(400).json({ ok: false, message: "No editable fields supplied." });
   }
 
@@ -326,9 +335,9 @@ router.patch("/:code", async (req: Request, res: Response) => {
       params.push(prog.id);
       sets.push(`programme_id = $${params.length}`);
     }
-    if (semesterId !== null) {
-      params.push(semesterId);
-      sets.push(`semester_id = $${params.length}`);
+    if (academicYearId !== null) {
+      params.push(academicYearId);
+      sets.push(`academic_year_id = $${params.length}`);
     }
 
     /* pull the resulting row first so total recomputes from true values */
@@ -362,7 +371,7 @@ router.patch("/:code", async (req: Request, res: Response) => {
     return res.json({ ok: true, subjectCode: code });
   } catch (err) {
     if ((err as { code?: string }).code === "23503") {
-      return res.status(400).json({ ok: false, message: "Unknown programme or semester reference." });
+      return res.status(400).json({ ok: false, message: "Unknown programme or academic year reference." });
     }
     console.error("PATCH /api/courses/:code failed:", err);
     return res.status(500).json({ ok: false, message: "Database error while saving the course." });

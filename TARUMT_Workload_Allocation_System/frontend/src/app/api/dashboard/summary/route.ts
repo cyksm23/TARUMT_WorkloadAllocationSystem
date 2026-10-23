@@ -62,6 +62,7 @@ export async function GET() {
         (SELECT COUNT(*) FROM lecturers WHERE employment_type = 'PART_TIME') AS lecturers_part_time,
         (SELECT COUNT(*) FROM lecturers WHERE is_pl)                         AS programme_leaders,
         (SELECT COUNT(*) FROM academic_years)                                AS years_total,
+        (SELECT COUNT(*) FROM academic_year_terms)                           AS academic_year_terms_total,
         (SELECT COUNT(*) FROM subjects WHERE is_active)                      AS subjects_total,
         (SELECT COUNT(*) FROM programmes)                                    AS programmes_total,
         (SELECT COUNT(*) FROM workloads)                                     AS workloads_total,
@@ -101,7 +102,7 @@ export async function GET() {
         academicYears: n(r.years_total),
         programs: n(r.programmes_total),
         activeSubjects: n(r.subjects_total),
-        semesters: n(r.semesters_total),
+        academicYearTerms: n(r.academic_year_terms_total),
       },
       allocations: {
         total: n(r.workloads_total),

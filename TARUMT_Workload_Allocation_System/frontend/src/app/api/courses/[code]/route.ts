@@ -91,7 +91,7 @@ export async function PATCH(request: Request, { params }: { params: { code: stri
   const sets: string[] = [];
   const params_: unknown[] = [];
   let programmeCode: string | null = null;
-  let semesterId: number | null = null;
+  let academicYearId: number | null = null;
 
   for (const field of COURSE_COLUMNS) {
     if (!(field.key in body)) continue;
@@ -103,14 +103,14 @@ export async function PATCH(request: Request, { params }: { params: { code: stri
   if (typeof body.programmeCode === "string" && body.programmeCode.trim()) {
     programmeCode = body.programmeCode.trim().toUpperCase();
   }
-  if (Number.isInteger(Number(body.semesterId)) && Number(body.semesterId) > 0) {
-    semesterId = Number(body.semesterId);
+  if (Number.isInteger(Number(body.academicYearId)) && Number(body.academicYearId) > 0) {
+    academicYearId = Number(body.academicYearId);
   }
 
   /* recompute total from the FINAL set of components when any hour changed */
   const hoursTouched = ["lectureHours", "tutorialHours", "practicalHours"].some((k) => k in body);
 
-  if (sets.length === 0 && !programmeCode && semesterId === null) {
+  if (sets.length === 0 && !programmeCode && academicYearId === null) {
     return NextResponse.json({ ok: false, message: "No editable fields supplied." }, { status: 400 });
   }
 
@@ -130,9 +130,9 @@ export async function PATCH(request: Request, { params }: { params: { code: stri
       params_.push(prog.id);
       sets.push(`programme_id = $${params_.length}`);
     }
-    if (semesterId !== null) {
-      params_.push(semesterId);
-      sets.push(`semester_id = $${params_.length}`);
+    if (academicYearId !== null) {
+      params_.push(academicYearId);
+      sets.push(`academic_year_id = $${params_.length}`);
     }
 
     /* pull the resulting row first so total recomputes from true values */
@@ -171,7 +171,7 @@ export async function PATCH(request: Request, { params }: { params: { code: stri
   } catch (err) {
     if ((err as { code?: string }).code === "23503") {
       return NextResponse.json(
-        { ok: false, message: "Unknown programme or semester reference." },
+        { ok: false, message: "Unknown programme or academic year reference." },
         { status: 400 },
       );
     }

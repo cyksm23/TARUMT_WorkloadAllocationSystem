@@ -1,7 +1,7 @@
 # Python engine — FastAPI
 
 Algorithms only: OT calculation, auto-assign, class splitting,
-semester suggestions. PostgreSQL via psycopg (raw SQL), no ORM.
+academic-year intake suggestions. PostgreSQL via psycopg (raw SQL), no ORM.
 
 ## Run
 
@@ -19,7 +19,7 @@ Interactive docs: http://localhost:8001/docs
 
 | Folder | Purpose |
 |---|---|
-| app/api/ | routers (ot, auto_assign, class_split, semester_suggestion) |
+| app/api/ | routers (ot, auto_assign, class_split, intake_suggestion) |
 | app/services/ | orchestration + DB access |
 | app/algorithms/ | pure functions: OT calc, split rules (P > 28, T > 36), suggestions |
 | app/schemas/ | pydantic models |
@@ -30,4 +30,4 @@ Business rules (function.docx):
   Programme Leader 11-12h -> overtime => OT claim.
 - Practical > 28 students -> split. Tutorial > 36 students -> split.
 - 1 moderator per course, max 9 samples.
-- Semester suggestion: current 2025/05 -> suggest last year 2024/05.
+- Academic-year intake suggestion: current 202605 -> suggest last year 202505.

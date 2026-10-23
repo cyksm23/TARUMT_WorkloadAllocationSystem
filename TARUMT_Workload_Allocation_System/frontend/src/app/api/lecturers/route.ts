@@ -5,7 +5,7 @@ import { Pool } from "pg";
  * GET /api/lecturers — Programme Leader staff directory (UC_CPM_01).
  *
  * Full roster straight from PostgreSQL: lecturers joined with their
- * department and linked login account, plus a per-lecturer semester
+ * department and linked login account, plus a per-lecturer academic-year
  * workload roll-up. Hour limits are NOT stored per lecturer — they resolve
  * from workload_rules by role and the programme levels actually taught
  * (PL role rule wins; else Bachelor-only / Diploma-only / both / default),
@@ -84,7 +84,7 @@ export async function GET() {
         u.username,
         (SELECT COUNT(*)::int
            FROM workloads w
-          WHERE w.lecturer_id = l.id)                                AS semester_records,
+          WHERE w.lecturer_id = l.id)                     AS academic_year_records,
         (SELECT COALESCE(SUM(w.total_allocated_hours), 0)::float8
            FROM workloads w
           WHERE w.lecturer_id = l.id)                                AS allocated_hours
@@ -128,7 +128,7 @@ export async function GET() {
       departmentCode: r.department_code,
       departmentName: r.department_name,
       username: r.username,
-      semesterRecords: Number(r.semester_records ?? 0),
+      academicYearRecords: Number(r.academic_year_records ?? 0),
       allocatedHours: Number(r.allocated_hours ?? 0),
     }));
 

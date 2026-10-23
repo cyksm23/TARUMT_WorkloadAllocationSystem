@@ -6,7 +6,7 @@
  * assigned to lecturers. Policy enforced at save time by the API:
  * max 3 distinct courses per lecturer in Bachelor programmes and 4 in
  * Diploma programmes; only active lecturers; the course must carry a
- * semester; hour totals are resummed into workloads.total_allocated_hours.
+ * academic year; hour totals are resummed into workloads.total_allocated_hours.
  *
  * Assignment model:
  *   · the initial ASSIGN picks ONE lecturer who takes all three slots;
@@ -52,8 +52,8 @@ interface CourseRow {
   subjectName: string;
   programmeCode: string | null;
   programmeName: string;
-  semesterId: number | null;
-  semesterLabel: string;
+  academicYearId: number | null;
+  academicYearLabel: string;
   lectureHours: number;
   tutorialHours: number;
   practicalHours: number;
@@ -466,7 +466,7 @@ function AssignDialog({
             {course.programmeCode
               ? `${course.programmeCode} · ${course.programmeName}`
               : "No programme"}{" "}
-            · {course.semesterLabel}
+            · {course.academicYearLabel}
           </p>
           <p className="mt-[2px] text-[12.5px] text-textSecondary">
             {course.lectureHours} · {course.tutorialHours} · {course.practicalHours}{" "}
@@ -890,7 +890,7 @@ export default function AllocationsPage() {
                 Programme
               </p>
               <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                Semester
+                Academic Year
               </p>
               <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                 Hours (L · T · P)
@@ -956,9 +956,9 @@ export default function AllocationsPage() {
                         )}
                       </p>
 
-                      {/* semester */}
+                      {/* academic year */}
                       <p className="min-w-0 text-[12.5px] leading-snug text-textNormal">
-                        {c.semesterLabel}
+                        {c.academicYearLabel}
                       </p>
 
                       {/* hours */}

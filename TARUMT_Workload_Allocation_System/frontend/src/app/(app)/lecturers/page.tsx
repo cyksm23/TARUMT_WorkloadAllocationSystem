@@ -5,7 +5,7 @@
  *
  * Displays every lecturer from PostgreSQL (GET /api/lecturers): staff ID,
  * name, position, contact, employment classification, department, linked
- * account and a live semester-workload roll-up. Hour limits are derived —
+ * account and a live academic-year workload roll-up. Hour limits are derived —
  * NOT stored per lecturer — by resolving the editable workload_rules table
  * against each lecturer's role (Programme Leader wins) and the programme
  * levels actually taught (Bachelor only / Diploma only / both). The
@@ -49,7 +49,7 @@ interface LecturerRow {
   departmentCode: string | null;
   departmentName: string | null;
   username: string | null;
-  semesterRecords: number;
+  academicYearRecords: number;
   allocatedHours: number;
 }
 
@@ -591,7 +591,7 @@ function WorkloadCell({
             {lecturer.custom && <CustomLimitChip />}
             {overBadge}
           </div>
-          <p className="text-[11.5px] text-textSecondary">No semester workload yet</p>
+          <p className="text-[11.5px] text-textSecondary">No academic-year workload yet</p>
         </>
       )}
     </div>
@@ -1795,22 +1795,31 @@ export default function LecturersPage() {
   const [staffToast, setStaffToast] = useState<string | null>(null);
 
   /** floating anchor button: roster ⇄ Hour-limit rules card. Fixed to the
-      viewport, so it never scrolls away; mode flips once the card top
-      reaches the viewport (also when the user scrolls there by hand) */
+      viewport, so it never scrolls away; the mode flips as soon as the
+      card climbs into the upper half of the screen — via a click's smooth
+      arrival OR the user's own manual scroll (the card sits near the
+      page's end where its top can never reach the window's top, so a
+      fixed 120px test would never fire on shorter pages) */
   const rulesAnchorRef = useRef<HTMLDivElement | null>(null);
   const [atRules, setAtRules] = useState(false);
   const navigatingRef = useRef(false);
 
   useEffect(() => {
-    const onScroll = () => {
+    const update = () => {
       if (navigatingRef.current) return;
       const el = rulesAnchorRef.current;
       if (!el) return;
-      setAtRules(el.getBoundingClientRect().top <= 120);
+      setAtRules(el.getBoundingClientRect().top <= window.innerHeight * 0.5);
     };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    /* manual scrolling through some paths never reaches the window's
+       scroll event — polling keeps the label glued to the position */
+    const poll = window.setInterval(update, 150);
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.clearInterval(poll);
+    };
   }, []);
 
   const jumpRulesOrTop = () => {
@@ -2149,8 +2158,8 @@ export default function LecturersPage() {
                   <p className="text-[14px] font-semibold text-text">{l.fullName}</p>
                   <p className="mt-[2px] whitespace-nowrap text-[12px] text-textSecondary">
                     {l.position ?? "Lecturer"}
-                    {l.semesterRecords > 0
-                      ? ` · ${l.semesterRecords} semester record${l.semesterRecords > 1 ? "s" : ""}`
+                    {l.academicYearRecords > 0
+                      ? ` · ${l.academicYearRecords} academic-year record${l.academicYearRecords > 1 ? "s" : ""}`
                       : ""}
                   </p>
                 </div>

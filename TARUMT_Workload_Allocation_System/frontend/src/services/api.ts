@@ -21,7 +21,7 @@ export const api = {
   delete: <T>(path: string) => request<T>(BASE_URL, path, { method: "DELETE" }),
 };
 
-/** Python engine (OT calc, auto-assign, class split, semester suggestion). */
+/** Python engine (OT calc, auto-assign, class split, academic-year intake suggestion). */
 export const pythonApi = {
   get: <T>(path: string) => request<T>(PYTHON_URL, path),
   post: <T>(path: string, body: unknown) =>

@@ -74,7 +74,7 @@ interface SubjectRow {
   subjectId: number;
   subjectCode: string;
   subjectName: string;
-  semesterId: number | null;
+  academicYearId: number | null;
   lectureHours: string | number;
   tutorialHours: string | number;
   practicalHours: string | number;
@@ -90,7 +90,7 @@ const loadSubject = async (client: DbClient, code: string) => {
     SELECT s.id                AS "subjectId",
            s.subject_code      AS "subjectCode",
            s.subject_name      AS "subjectName",
-           s.semester_id       AS "semesterId",
+           s.academic_year_id       AS "academicYearId",
            s.lecture_hours     AS "lectureHours",
            s.tutorial_hours    AS "tutorialHours",
            s.practical_hours   AS "practicalHours",
@@ -233,21 +233,21 @@ export async function PUT(
       await client.query("ROLLBACK");
       return NextResponse.json({ ok: false, message: "Unknown course." }, { status: 404 });
     }
-    if (subject.semesterId === null) {
+    if (subject.academicYearId === null) {
       await client.query("ROLLBACK");
       return NextResponse.json(
-        { ok: false, message: "This course has no semester — edit the course first." },
+        { ok: false, message: "This course has no academic year — edit the course first." },
         { status: 409 },
       );
     }
     const { rows: semRows } = await client.query(
-      `SELECT week_count FROM semesters WHERE id = $1`,
-      [subject.semesterId],
+      `SELECT week_count FROM academic_year_terms WHERE id = $1`,
+      [subject.academicYearId],
     );
     if (semRows.length === 0) {
       await client.query("ROLLBACK");
       return NextResponse.json(
-        { ok: false, message: "The course's semester no longer exists." },
+        { ok: false, message: "The course's academic year no longer exists." },
         { status: 409 },
       );
     }
@@ -280,13 +280,13 @@ export async function PUT(
       const lecturerId = slots[key];
       const { rows: headerRows } = await client.query(
         `
-        INSERT INTO workloads (lecturer_id, semester_id)
+        INSERT INTO workloads (lecturer_id, academic_year_id)
         VALUES ($1, $2)
-        ON CONFLICT (lecturer_id, semester_id)
+        ON CONFLICT (lecturer_id, academic_year_id)
         DO UPDATE SET updated_at = NOW()
         RETURNING id
         `,
-        [lecturerId, subject.semesterId],
+        [lecturerId, subject.academicYearId],
       );
       const workloadId: number = headerRows[0].id;
       const hours = Number(subject[SLOT_HOURS[key] as keyof SubjectRow] ?? 0);

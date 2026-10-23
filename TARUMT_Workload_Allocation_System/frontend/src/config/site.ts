@@ -10,7 +10,7 @@ export const site = {
   /** Rotating notices on the login page (short, single line each). */
   notices: [
     "Workload allocations for the new academic session open on Monday.",
-    "Submit OT claims before the end-of-semester cut-off.",
+    "Submit OT claims before the end-of-term cut-off.",
     "New course records are published by the department administrator.",
     "Workload reports refresh nightly at 1:00 AM.",
   ],

@@ -9,11 +9,11 @@ export interface AcademicYear {
   updated_at: string;
 }
 
-export interface Semester {
+export interface AcademicYearTerm {
   id: number;
   academic_year_id: number;
-  semester_name: string; // 'Semester 1'
-  semester_code: string; // 'S1' | 'S2'
+  term_name: string; // 'May 2026'
+  term_code: string; // '202605'
   start_date: string;
   end_date: string;
   week_count: number;
@@ -81,7 +81,7 @@ export interface Subject {
   subject_code: string; // 'AACS2204'
   subject_name: string;
   programme_id: number | null;
-  semester_id: number | null;
+  academic_year_id: number | null;
   credit_hours: number;
   lecture_hours: number;
   tutorial_hours: number;
@@ -97,7 +97,7 @@ export interface Subject {
 export interface Workload {
   id: number;
   lecturer_id: number;
-  semester_id: number;
+  academic_year_id: number;
   total_allocated_hours: number;
   status: "DRAFT" | "PENDING" | "APPROVED" | "REJECTED";
   approved_by: number | null;

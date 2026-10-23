@@ -5,7 +5,7 @@ import { Pool } from "pg";
  * Same-origin fallback twin of backend-express routes/allocations.ts
  * (GET + POST /api/allocations). Slots live in workload_details (one row
  * per LECTURE/TUTORIAL/PRACTICAL under the slot lecturer's workloads
- * header for the subject's semester); hour totals are resummed after
+ * header for the subject's academic year); hour totals are resummed after
  * every write. Policy: 3 distinct Bachelor courses / 4 Diploma courses
  * per lecturer — checked on the post-state counts inside the transaction.
  */
@@ -72,7 +72,7 @@ interface SubjectRow {
   subjectId: number;
   subjectCode: string;
   subjectName: string;
-  semesterId: number | null;
+  academicYearId: number | null;
   lectureHours: string | number;
   tutorialHours: string | number;
   practicalHours: string | number;
@@ -92,7 +92,7 @@ const loadSubject = async (
     SELECT s.id                AS "subjectId",
            s.subject_code      AS "subjectCode",
            s.subject_name      AS "subjectName",
-           s.semester_id       AS "semesterId",
+           s.academic_year_id       AS "academicYearId",
            s.lecture_hours     AS "lectureHours",
            s.tutorial_hours    AS "tutorialHours",
            s.practical_hours   AS "practicalHours",
@@ -272,21 +272,21 @@ export async function POST(request: Request) {
       await client.query("ROLLBACK");
       return NextResponse.json({ ok: false, message: "Unknown course." }, { status: 404 });
     }
-    if (subject.semesterId === null) {
+    if (subject.academicYearId === null) {
       await client.query("ROLLBACK");
       return NextResponse.json(
-        { ok: false, message: "This course has no semester — edit the course first." },
+        { ok: false, message: "This course has no academic year — edit the course first." },
         { status: 409 },
       );
     }
     const { rows: semRows } = await client.query(
-      `SELECT week_count FROM semesters WHERE id = $1`,
-      [subject.semesterId],
+      `SELECT week_count FROM academic_year_terms WHERE id = $1`,
+      [subject.academicYearId],
     );
     if (semRows.length === 0) {
       await client.query("ROLLBACK");
       return NextResponse.json(
-        { ok: false, message: "The course's semester no longer exists." },
+        { ok: false, message: "The course's academic year no longer exists." },
         { status: 409 },
       );
     }
@@ -341,13 +341,13 @@ export async function POST(request: Request) {
       const lecturerId = slots[key];
       const { rows: headerRows } = await client.query(
         `
-        INSERT INTO workloads (lecturer_id, semester_id)
+        INSERT INTO workloads (lecturer_id, academic_year_id)
         VALUES ($1, $2)
-        ON CONFLICT (lecturer_id, semester_id)
+        ON CONFLICT (lecturer_id, academic_year_id)
         DO UPDATE SET updated_at = NOW()
         RETURNING id
         `,
-        [lecturerId, subject.semesterId],
+        [lecturerId, subject.academicYearId],
       );
       const workloadId: number = headerRows[0].id;
       const hours = Number(subject[SLOT_HOURS[key] as keyof SubjectRow] ?? 0);

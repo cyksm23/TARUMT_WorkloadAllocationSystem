@@ -9,7 +9,7 @@ export default function SuggestionsPage() {
     <ModulePlaceholder
       title="Course Suggestion"
       module="Course and Lab Management"
-      description="Plan the forthcoming semester by retrieving the allocation records of the corresponding semester of the previous academic year (e.g. 2024/05 for 2025/05). Suggestions are editable, validated against policy limits before import, and adjusted automatically when lecturers change between years."
+      description="Plan the forthcoming intake by retrieving the allocation records of the corresponding term of the previous academic year (e.g. 202505 for 202605). Suggestions are editable, validated against policy limits before import, and adjusted automatically when lecturers change between years."
       icon={History}
     />
   );

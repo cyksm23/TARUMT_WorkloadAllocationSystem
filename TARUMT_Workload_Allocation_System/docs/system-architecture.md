@@ -65,8 +65,8 @@ the UI keeps working even with the backend stopped.
 - **Algorithm engine — Python FastAPI (port 8001, `backend-python/`)**
   Parked `/health` skeleton; will own OT calculation (hours above limits),
   auto-assign, class splitting (practical > 28 students, tutorial > 36),
-  historical course suggestion and semester suggestion (same semester last
-  year, e.g. 2025/05 → 2024/05).
+  historical course suggestion and academic-year intake suggestion (same
+  intake last year, e.g. 202505 → 202605).
 - Both TypeScript services use **raw SQL through the `pg` driver with
   parameterized queries** (`$1, $2…` — no ORM, no string-built SQL);
   Postgres is managed via `psql` CLI (Docker optional later).
@@ -74,14 +74,14 @@ the UI keeps working even with the backend stopped.
 ## 3. Database summary
 
 - **Database**: `teaching_workload_db` (UTF-8) on **PostgreSQL 17, port 5432**
-- **11 tables**: academic_years, semesters, users, departments, lecturers,
+- **11 tables**: academic_years, academic_year_terms, users, departments, lecturers,
   programmes, subjects, workload_rules (editable hour-limit pairs),
   workloads, workload_details, workload_history (audit table)
 - **3 reporting views**: vw_lecturer_workload_summary, vw_subject_allocation,
   vw_department_workload
 - **13 foreign keys** (referential integrity), **32 indexes**
-- Unique business keys: `uq_semesters_year_code (academic_year_id, semester_code)`,
-  `uq_workload_lecturer_semester (lecturer_id, semester_id)`
+- Unique business keys: `uq_academic_year_terms_code (academic_year_id, term_code)`,
+  `uq_workload_lecturer_year (lecturer_id, academic_year_id)`
 - **Snapshot limit design**: each lecturer carries a materialized
   `min_limit_hours / max_limit_hours` pair seeded once from the rules, then
   never rewritten by rule edits; pairs drifting from (or outside) the

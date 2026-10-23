@@ -12,9 +12,10 @@
  *
  * Storage model: the assignment lives in workload_details (one row per
  * slot activity) under the slot lecturer's workloads header for the
- * subject's semester (headers are upserted by (lecturer_id, semester_id)).
+ * subject's academic year (headers are upserted by (lecturer_id,
+ * academic_year_id)).
  * slot hours come from the subject's L/T/P components; total_hours =
- * hours_per_week × semester week_count; after every write each touched
+ * hours_per_week × term week_count; after every write each touched
  * workload header's total_allocated_hours is resummed and emptied headers
  * are dropped.
  *
@@ -71,7 +72,7 @@ interface SubjectRow {
   subjectId: number;
   subjectCode: string;
   subjectName: string;
-  semesterId: number | null;
+  academicYearId: number | null;
   lectureHours: string | number;
   tutorialHours: string | number;
   practicalHours: string | number;
@@ -88,7 +89,7 @@ const loadSubject = async (client: { query: Function }, code: string) => {
     SELECT s.id                      AS "subjectId",
            s.subject_code            AS "subjectCode",
            s.subject_name            AS "subjectName",
-           s.semester_id             AS "semesterId",
+           s.academic_year_id             AS "academicYearId",
            s.lecture_hours           AS "lectureHours",
            s.tutorial_hours          AS "tutorialHours",
            s.practical_hours         AS "practicalHours",
@@ -252,7 +253,7 @@ const writeSlots = async (
   try {
     await client.query("BEGIN");
 
-    /* subject must exist and carry a semester + week count */
+    /* subject must exist and carry an academic year + week count */
     const subject = await loadSubject(client, subjectCode);
     if (!subject) {
       await client.query("ROLLBACK");
@@ -260,22 +261,22 @@ const writeSlots = async (
     }
 
     let weekCount = 0;
-    if (subject.semesterId === null) {
+    if (subject.academicYearId === null) {
       await client.query("ROLLBACK");
       return res
         .status(409)
-        .json({ ok: false, message: "This course has no semester — edit the course first." });
+        .json({ ok: false, message: "This course has no academic year — edit the course first." });
     }
     {
       const { rows } = await client.query(
-        `SELECT week_count FROM semesters WHERE id = $1`,
-        [subject.semesterId],
+        `SELECT week_count FROM academic_year_terms WHERE id = $1`,
+        [subject.academicYearId],
       );
       if (rows.length === 0) {
         await client.query("ROLLBACK");
         return res
           .status(409)
-          .json({ ok: false, message: "The course's semester no longer exists." });
+          .json({ ok: false, message: "The course's academic year no longer exists." });
       }
       weekCount = Number(rows[0].week_count) || 14;
     }
@@ -334,13 +335,13 @@ const writeSlots = async (
       const lecturerId = slots[key];
       const { rows: headerRows } = await client.query(
         `
-        INSERT INTO workloads (lecturer_id, semester_id)
+        INSERT INTO workloads (lecturer_id, academic_year_id)
         VALUES ($1, $2)
-        ON CONFLICT (lecturer_id, semester_id)
+        ON CONFLICT (lecturer_id, academic_year_id)
         DO UPDATE SET updated_at = NOW()
         RETURNING id
         `,
-        [lecturerId, subject.semesterId],
+        [lecturerId, subject.academicYearId],
       );
       const workloadId: number = headerRows[0].id;
       const hours = Number(subject[SLOT_HOURS[key] as keyof SubjectRow] ?? 0);

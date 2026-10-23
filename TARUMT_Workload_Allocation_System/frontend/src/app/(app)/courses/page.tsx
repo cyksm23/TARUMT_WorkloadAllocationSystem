@@ -6,7 +6,7 @@
  *
  * One page, two rosters behind a segmented switch (matching the sidebar's
  * single "Courses & Programmes" entry):
- *   · COURSES      — subjects joined with programme + semester, hour
+ *   · COURSES      — subjects joined with programme + academic year, hour
  *                    components (L/T/P), total hours (auto L+T+P),
  *                    students/groups, status.
  *   · PROGRAMMES   — programme directory with department, level, duration
@@ -27,12 +27,14 @@
 
 import {
   Children,
+  Fragment,
   isValidElement,
   useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   ArrowDown,
@@ -62,8 +64,8 @@ interface CourseRow {
   subjectName: string;
   programmeCode: string | null;
   programmeName: string;
-  semesterId: number | null;
-  semesterLabel: string;
+  academicYearId: number | null;
+  academicYearLabel: string;
   creditHours: number;
   lectureHours: number;
   tutorialHours: number;
@@ -97,9 +99,11 @@ interface ProgrammeOption {
   name: string;
 }
 
-interface SemesterOption {
+interface AcademicYearOption {
   id: number;
   label: string;
+  /** academic year of the term — drives the picker's optgroups */
+  yearCode: string;
 }
 
 interface DepartmentOption {
@@ -269,15 +273,33 @@ function FilterSelect({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  /* flatten the <option> children into {value,label} menu entries */
-  const options = Children.toArray(children)
+  /* flatten the <option>/<optgroup> children into menu entries — plain
+     options render ungrouped; an optgroup (the academic-year picker's
+     intakes) emits a caption row followed by its own options */
+  const options: Array<{ value: string; label: string; group: string | null }> = [];
+  Children.toArray(children)
     .filter(isValidElement)
-    .map((el) => {
-      const props = el.props as { value?: unknown; children?: ReactNode };
-      return {
+    .forEach((el) => {
+      const props = el.props as { value?: unknown; label?: unknown; children?: ReactNode };
+      if (props.value === undefined && typeof props.label === "string") {
+        const group = props.label;
+        Children.toArray(props.children)
+          .filter(isValidElement)
+          .forEach((child) => {
+            const cp = child.props as { value?: unknown; children?: ReactNode };
+            options.push({
+              value: String(cp.value ?? ""),
+              label: String(cp.children ?? cp.value ?? ""),
+              group,
+            });
+          });
+        return;
+      }
+      options.push({
         value: String(props.value ?? ""),
         label: String(props.children ?? props.value ?? ""),
-      };
+        group: null,
+      });
     });
   const selected = options.find((o) => o.value === value) ?? options[0];
 
@@ -338,28 +360,39 @@ function FilterSelect({
           aria-label={ariaLabel}
           className="animate-[menuIn_0.18s_ease-out_both] absolute left-0 top-full z-30 mt-xs w-max min-w-full origin-top-left overflow-hidden rounded-card border border-divider bg-surface py-xs shadow-card"
         >
-          {options.map((o) => {
+          {options.map((o, i) => {
             const active = o.value === value;
+            const opensGroup = o.group !== null && o.group !== options[i - 1]?.group;
             return (
-              <button
-                key={o.value}
-                type="button"
-                role="option"
-                aria-selected={active}
-                title={o.label}
-                onClick={() => {
-                  onChange(o.value);
-                  setOpen(false);
-                }}
-                className={`flex h-9 w-full items-center gap-sm whitespace-nowrap px-md text-left text-[13px] transition-colors ${
-                  active
-                    ? "bg-primaryLight font-semibold text-primary"
-                    : "font-medium text-textNormal hover:bg-hoverBg"
-                }`}
-              >
-                {o.label}
-                {active && <Check size={14} className="ml-auto shrink-0" />}
-              </button>
+              <Fragment key={`${o.group ?? "opt"}-${o.value}`}>
+                {opensGroup && (
+                  <p
+                    className={`${
+                      i === 0 ? "" : "mt-1 border-t border-divider"
+                    } px-md pb-[6px] pt-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-textSecondary`}
+                  >
+                    {o.group}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  title={o.label}
+                  onClick={() => {
+                    onChange(o.value);
+                    setOpen(false);
+                  }}
+                  className={`flex h-9 w-full items-center gap-sm whitespace-nowrap px-md text-left text-[13px] transition-colors ${
+                    active
+                      ? "bg-primaryLight font-semibold text-primary"
+                      : "font-medium text-textNormal hover:bg-hoverBg"
+                  }`}
+                >
+                  {o.label}
+                  {active && <Check size={14} className="ml-auto shrink-0" />}
+                </button>
+              </Fragment>
             );
           })}
         </div>
@@ -474,10 +507,14 @@ function ViewSwitch({
 function DialogShell({
   onClose,
   width,
+  bodyRef,
   children,
 }: {
   onClose: () => void;
   width: string;
+  /** optional scroll control — the course dialogs use it for the sum-warning
+      auto flow (direct to class-size & splitting / back to top) */
+  bodyRef?: RefObject<HTMLDivElement>;
   children: ReactNode;
 }) {
   return (
@@ -488,6 +525,7 @@ function DialogShell({
       }}
     >
       <div
+        ref={bodyRef}
         className={`animate-[menuIn_0.2s_ease-out_both] max-h-[calc(100vh-64px)] w-full ${width} overflow-y-auto rounded-card border border-divider bg-surface p-lg shadow-card`}
       >
         {children}
@@ -530,7 +568,7 @@ interface CourseForm {
   code: string;
   name: string;
   programmeCode: string;
-  semesterId: string;
+  academicYearId: string;
   lectureHours: string;
   tutorialHours: string;
   practicalHours: string;
@@ -544,7 +582,7 @@ const COURSE_EMPTY: CourseForm = {
   code: "",
   name: "",
   programmeCode: "",
-  semesterId: "",
+  academicYearId: "",
   lectureHours: "2",
   tutorialHours: "1",
   practicalHours: "0",
@@ -558,17 +596,22 @@ const COURSE_CODE_DUP = "This course code is already registered — duplicate co
 
 /**
  * Per-field course-form validator. Presence fields (code format, name,
- * programme, semester) report on a save attempt; the sanitized numeric
+ * programme, academic year) report on a save attempt; the sanitized numeric
  * fields report once blurred or the user attempts a save — never mid-typing
  * (digit sanitizers already keep letters from landing).
  */
-function useCourseValidation(form: CourseForm, attempted: boolean, blurred: Set<string>) {
+function useCourseValidation(
+  form: CourseForm,
+  attempted: boolean,
+  blurred: Set<string>,
+  countsOptional = false,
+) {
   return useMemo(() => {
     const errors: Record<string, string | null> = {
       code: null,
       name: null,
       programmeCode: null,
-      semesterId: null,
+      academicYearId: null,
       lectureHours: null,
       tutorialHours: null,
       practicalHours: null,
@@ -587,8 +630,8 @@ function useCourseValidation(form: CourseForm, attempted: boolean, blurred: Set<
     if (attempted && !form.name.trim()) errors.name = "Please enter the course name.";
     if (form.programmeCode === "" && db("programmeCode"))
       errors.programmeCode = "Please select a programme.";
-    if (form.semesterId === "" && db("semesterId"))
-      errors.semesterId = "Please select a semester.";
+    if (form.academicYearId === "" && db("academicYearId"))
+      errors.academicYearId = "Please select an academic year.";
 
     const hourFields: Array<[keyof CourseForm, string]> = [
       ["lectureHours", "Lecture hours"],
@@ -602,22 +645,26 @@ function useCourseValidation(form: CourseForm, attempted: boolean, blurred: Set<
       }
     });
 
-    if (db("studentCount")) {
+    if (attempted && !countsOptional && form.studentCount === "") {
+      errors.studentCount = "Please enter the total number of students.";
+    } else if (db("studentCount")) {
       const s = Number(form.studentCount);
       if (!Number.isInteger(s) || s < 0 || s > 2000)
         errors.studentCount = "Students must be a whole number between 0 and 2000.";
     }
 
-    /* per-class headcounts — required: an empty field blocks the save
-       attempt; 0 is valid (a course without that class component) */
-    if (attempted && form.tutorialStudents === "") {
+    /* per-class headcounts — required in the EDIT dialog (every value is
+       prefilled there); the ADD dialog allows leaving them empty so the
+       course can be created first and sized later. 0 is always valid
+       (a course without that class component). */
+    if (attempted && !countsOptional && form.tutorialStudents === "") {
       errors.tutorialStudents = "Please enter the number of tutorial students.";
     } else if (db("tutorialStudents")) {
       const t = Number(form.tutorialStudents);
       if (!Number.isInteger(t) || t < 0 || t > 2000)
         errors.tutorialStudents = "Tutorial students must be a whole number between 0 and 2000.";
     }
-    if (attempted && form.practicalStudents === "") {
+    if (attempted && !countsOptional && form.practicalStudents === "") {
       errors.practicalStudents = "Please enter the number of practical students.";
     } else if (db("practicalStudents")) {
       const p = Number(form.practicalStudents);
@@ -625,30 +672,41 @@ function useCourseValidation(form: CourseForm, attempted: boolean, blurred: Set<
         errors.practicalStudents = "Practical students must be a whole number between 0 and 2000.";
     }
 
-    /* cross-check — the tutorial + practical headcounts together may not
-       exceed the total students. Same visibility policy: appears after a
-       blur of any involved field or a save attempt, never mid-typing, and
-       only when every involved field is otherwise valid (an empty count is
-       still covered by its required message; format errors take priority).
-       It blocks the save like every field error and is surfaced by the
-       section's summary line (errors.studentSum), not under the inputs. */
+    /* per-class cross-check — each class headcount may not exceed the
+       total students ON ITS OWN (tutorial and practical are separate
+       intakes, not one combined pool). Same visibility policy: a message
+       appears after a blur of its own field or the total's, a save
+       attempt, never mid-typing, and only when both involved fields are
+       otherwise valid (an empty count is still covered by its required
+       message; format errors take priority). Each message blocks the
+       save like every field error and the section renders them below the
+       grid (errors.studentSum), not under the inputs. */
     const tNum = form.tutorialStudents === "" ? null : Number(form.tutorialStudents);
     const pNum = form.practicalStudents === "" ? null : Number(form.practicalStudents);
     const sNum = form.studentCount === "" ? null : Number(form.studentCount);
+    const sumWarnings: string[] = [];
     if (
-      (attempted ||
-        blurred.has("tutorialStudents") ||
-        blurred.has("practicalStudents") ||
-        blurred.has("studentCount")) &&
+      (attempted || blurred.has("tutorialStudents") || blurred.has("studentCount")) &&
       tNum !== null &&
-      pNum !== null &&
       sNum !== null &&
       errors.tutorialStudents === null &&
+      errors.studentCount === null &&
+      tNum > sNum
+    ) {
+      sumWarnings.push(`Tutorial students (${tNum}) exceed the total students (${sNum}).`);
+    }
+    if (
+      (attempted || blurred.has("practicalStudents") || blurred.has("studentCount")) &&
+      pNum !== null &&
+      sNum !== null &&
       errors.practicalStudents === null &&
       errors.studentCount === null &&
-      tNum + pNum > sNum
+      pNum > sNum
     ) {
-      errors.studentSum = `Tutorial + practical students (${tNum + pNum}) exceed the total students (${sNum}).`;
+      sumWarnings.push(`Practical students (${pNum}) exceed the total students (${sNum}).`);
+    }
+    if (sumWarnings.length > 0) {
+      errors.studentSum = sumWarnings.join("\n");
     }
     return errors;
   }, [form, attempted, blurred]);
@@ -804,10 +862,10 @@ function GroupAutoCell({
  *
  * Two stacked columns: the headcount inputs on the left (tutorial, then
  * practical, then the total) each paired with its auto-derived group count
- * on the right; the sum-exceed warning surfaces in the line under the grid.
- * The flexible class-size rule set lives in the Class-size rules card below
- * the roster — mirroring the Lecturers page's Hour-limit rules card — and
- * every group count here derives from those limits.
+ * on the right; the per-class exceed warnings surface in lines under the
+ * grid. The flexible class-size rule set lives in the Class-size rules card
+ * below the roster — mirroring the Lecturers page's Hour-limit rules card —
+ * and every group count here derives from those limits.
  */
 function ClassSplittingSection({
   form,
@@ -815,6 +873,7 @@ function ClassSplittingSection({
   markBlurred,
   errors,
   sumWarning,
+  sectionRef,
   tutorialLimit,
   practicalLimit,
   tutorialGroups,
@@ -826,6 +885,8 @@ function ClassSplittingSection({
   markBlurred: (k: string) => void;
   errors: Record<string, string | null>;
   sumWarning: string | null;
+  /** dialog attaches this so a sum warning can direct the scroll here */
+  sectionRef?: RefObject<HTMLDivElement>;
   tutorialLimit: number;
   practicalLimit: number;
   tutorialGroups: number;
@@ -836,7 +897,7 @@ function ClassSplittingSection({
   const practicalCount = Number(form.practicalStudents || "0");
 
   return (
-    <div className="sm:col-span-2">
+    <div ref={sectionRef} className="sm:col-span-2">
       {/* headcounts on the left column, their auto-derived group counts on
           the right — each box pairs with the input beside it */}
       <div className="grid grid-cols-1 gap-x-md gap-y-lg sm:grid-cols-2">
@@ -881,34 +942,85 @@ function ClassSplittingSection({
         />
       </div>
 
-      {/* sum-exceed warning lives here — blocking like every field error;
-          otherwise show the guidance line only until counts are entered */}
-      {sumWarning ? (
-        <p className="animate-[badgeIn_0.2s_ease-out_both] mt-md flex items-start gap-[4px] text-[11.5px] font-medium leading-tight text-errorText">
-          <TriangleAlert size={12} className="mt-[2px] shrink-0" />
-          {sumWarning}
-        </p>
+      {/* per-class exceed warnings live here — blocking like every field
+          error; otherwise show the guidance line only until counts are
+          entered */}
+      {sumWarning && sumWarning.length > 0 ? (
+        <div className="mt-md flex flex-col gap-1">
+          {sumWarning.split("\n").map((w) => (
+            <p
+              key={w}
+              className="animate-[badgeIn_0.2s_ease-out_both] flex items-start gap-[4px] text-[11.5px] font-medium leading-tight text-errorText"
+            >
+              <TriangleAlert size={12} className="mt-[2px] shrink-0" />
+              {w}
+            </p>
+          ))}
+        </div>
       ) : tutorialCount === 0 && practicalCount === 0 ? (
         <p className="mt-md flex flex-wrap items-center gap-x-sm text-[11.5px] leading-snug text-textSecondary">
           Enter the two student counts — classes over a class-size rule split into groups
-          automatically.
+          automatically. They are optional: leave them empty now and fill them in later.
         </p>
       ) : null}
     </div>
   );
 }
 
+/**
+ * Auto-scroll flow for the class-size exceed warnings (both course dialogs).
+ *
+ * When a blocking warning appears ("Tutorial/Practical students … exceed
+ * the total students…"), the dialog body smoothly scrolls itself down to
+ * the Class-size & splitting section — the fix lives there, so the user
+ * no longer hunts for it by hand. Once the counts are corrected and the
+ * warnings clear, the body returns to the top automatically.
+ * Uses plain scrollTo math on the dialog body because scrollIntoView
+ * would also drag the page behind the overlay.
+ */
+function useSumWarningScroll(sumWarning: string | null): {
+  bodyRef: RefObject<HTMLDivElement>;
+  sectionRef: RefObject<HTMLDivElement>;
+} {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const warned = useRef(false);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (sumWarning) {
+      warned.current = true;
+      const section = sectionRef.current;
+      if (body && section) {
+        const delta = section.getBoundingClientRect().top - body.getBoundingClientRect().top;
+        const max = body.scrollHeight - body.clientHeight;
+        body.scrollTo({
+          top: Math.min(max, Math.max(0, body.scrollTop + delta - 8)),
+          behavior: "smooth",
+        });
+      }
+    } else if (warned.current) {
+      warned.current = false;
+      if (body && body.scrollTop > 0) {
+        body.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    }
+  }, [sumWarning]);
+
+  return { bodyRef, sectionRef };
+}
+
 /** Add course dialog — POST /api/courses (UC_CPM_01 create records) */
 function AddCourseDialog({
   courses,
   programmes,
-  semesters,
+  academicYears,
   classSizeRules,
   onClose,
   onSaved,
 }: {
   programmes: ProgrammeOption[];
-  semesters: SemesterOption[];
+  academicYears: AcademicYearOption[];
   /** existing codes — live duplicate refusal mirrors the Staff ID guard */
   courses: CourseRow[];
   classSizeRules: ClassSizeRule[];
@@ -918,8 +1030,8 @@ function AddCourseDialog({
 }) {
   const [form, setForm] = useState<CourseForm>({
     ...COURSE_EMPTY,
-    /* no placeholder entry — the picker opens directly on the first semester */
-    semesterId: semesters[0] ? String(semesters[0].id) : "",
+    /* no placeholder entry — the picker opens directly on the first academic year */
+    academicYearId: academicYears[0] ? String(academicYears[0].id) : "",
   });
   const [saving, setSaving] = useState(false);
   const [attempted, setAttempted] = useState(false);
@@ -956,11 +1068,14 @@ function AddCourseDialog({
     practicalLimit,
   );
 
-  const errors = useCourseValidation(form, attempted, blurred);
+  const errors = useCourseValidation(form, attempted, blurred, true);
   const liveCodeError = codeDupe ? COURSE_CODE_DUP : errors.code;
   const codeError = serverDupe ? COURSE_CODE_DUP : liveCodeError;
   const fieldBlocked =
     Object.values(errors).some(Boolean) || codeDupe || serverDupe;
+
+  /* sum-warning auto flow: direct to class-size & splitting, back to top */
+  const { bodyRef, sectionRef } = useSumWarningScroll(errors.studentSum);
 
   const save = async () => {
     setServerDupe(false);
@@ -975,14 +1090,17 @@ function AddCourseDialog({
           subjectCode: form.code,
           subjectName: form.name.trim(),
           programmeCode: form.programmeCode,
-          semesterId: Number(form.semesterId),
+          academicYearId: Number(form.academicYearId),
           lectureHours: Number(form.lectureHours),
           tutorialHours: Number(form.tutorialHours),
           practicalHours: Number(form.practicalHours),
-          studentCount: Number(form.studentCount),
-          groupCount: split.totalGroups,
-          tutorialStudents: Number(form.tutorialStudents),
-          practicalStudents: Number(form.practicalStudents),
+          studentCount: form.studentCount === "" ? 0 : Number(form.studentCount),
+          /* groups derive once real sizes exist — until then the DB
+             default of 1 group applies */
+          groupCount: split.totalGroups || 1,
+          /* sizes are optional — empty stores NULL (not filled in yet) */
+          tutorialStudents: form.tutorialStudents === "" ? null : Number(form.tutorialStudents),
+          practicalStudents: form.practicalStudents === "" ? null : Number(form.practicalStudents),
           isActive: form.isActive,
         }),
       });
@@ -1004,7 +1122,7 @@ function AddCourseDialog({
   };
 
   return (
-    <DialogShell onClose={onClose} width="max-w-[680px]">
+    <DialogShell onClose={onClose} width="max-w-[680px]" bodyRef={bodyRef}>
       <DialogHeader
         title="Add course"
         subtitle="Create a course record with its hour components and class sizes."
@@ -1037,17 +1155,25 @@ function AddCourseDialog({
             ))}
           </FilterSelect>
         </Field>
-        <Field label="Semester" error={errors.semesterId}>
+        <Field label="Academic Year" error={errors.academicYearId}>
           <FilterSelect
-            ariaLabel="Select semester"
-            value={form.semesterId}
-            onChange={(v) => set("semesterId", v)}
+            ariaLabel="Select academic year"
+            value={form.academicYearId}
+            onChange={(v) => set("academicYearId", v)}
             fullWidth
           >
-            {semesters.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
+            {/* academic-year groups — three coded intakes per year
+                (2026/2027 → 202605 · May 2026 …) */}
+            {Array.from(new Set(academicYears.map((s) => s.yearCode))).map((yearCode) => (
+              <optgroup key={yearCode} label={`AY ${yearCode}`}>
+                {academicYears
+                  .filter((s) => s.yearCode === yearCode)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+              </optgroup>
             ))}
           </FilterSelect>
         </Field>
@@ -1109,6 +1235,7 @@ function AddCourseDialog({
           tutorialLimit={tutorialLimit}
           practicalLimit={practicalLimit}
           sumWarning={errors.studentSum}
+          sectionRef={sectionRef}
           tutorialGroups={split.tutorialGroups}
           practicalGroups={split.practicalGroups}
           totalGroups={split.totalGroups}
@@ -1153,14 +1280,14 @@ function AddCourseDialog({
 function EditCourseDialog({
   course,
   programmes,
-  semesters,
+  academicYears,
   classSizeRules,
   onClose,
   onSaved,
 }: {
   course: CourseRow;
   programmes: ProgrammeOption[];
-  semesters: SemesterOption[];
+  academicYears: AcademicYearOption[];
   classSizeRules: ClassSizeRule[];
   onClose: () => void;
   onSaved: (toast: string) => void;
@@ -1169,7 +1296,7 @@ function EditCourseDialog({
     code: course.subjectCode,
     name: course.subjectName,
     programmeCode: course.programmeCode ?? "",
-    semesterId: course.semesterId ? String(course.semesterId) : "",
+    academicYearId: course.academicYearId ? String(course.academicYearId) : "",
     lectureHours: String(course.lectureHours),
     tutorialHours: String(course.tutorialHours),
     practicalHours: String(course.practicalHours),
@@ -1208,6 +1335,9 @@ function EditCourseDialog({
   const errors = useCourseValidation(form, attempted, blurred);
   const fieldBlocked = Object.values(errors).some(Boolean);
 
+  /* sum-warning auto flow: direct to class-size & splitting, back to top */
+  const { bodyRef, sectionRef } = useSumWarningScroll(errors.studentSum);
+
   const save = async () => {
     if (!attempted) setAttempted(true);
     if (fieldBlocked) return; /* stay clickable — a click reveals messages */
@@ -1219,7 +1349,7 @@ function EditCourseDialog({
         body: JSON.stringify({
           subjectName: form.name.trim(),
           programmeCode: form.programmeCode,
-          semesterId: Number(form.semesterId),
+          academicYearId: Number(form.academicYearId),
           lectureHours: Number(form.lectureHours),
           tutorialHours: Number(form.tutorialHours),
           practicalHours: Number(form.practicalHours),
@@ -1233,8 +1363,8 @@ function EditCourseDialog({
       const d = await r.json();
       if (r.status === 200 && d.ok) {
         onSaved(`Course ${form.code} (${form.name.trim()}) has been updated successfully.`);
-      } else if (typeof d.message === "string" && /programme|semester/i.test(d.message)) {
-        setBlurred((s) => new Set(s).add(/semester/i.test(d.message) ? "semesterId" : "programmeCode"));
+      } else if (typeof d.message === "string" && /programme|academic/i.test(d.message)) {
+        setBlurred((s) => new Set(s).add(/academic/i.test(d.message) ? "academicYearId" : "programmeCode"));
       } else {
         console.error("[EditCourseDialog] update failed:", d);
       }
@@ -1246,7 +1376,7 @@ function EditCourseDialog({
   };
 
   return (
-    <DialogShell onClose={onClose} width="max-w-[680px]">
+    <DialogShell onClose={onClose} width="max-w-[680px]" bodyRef={bodyRef}>
       <DialogHeader
         title="Edit course"
         subtitle={`Maintaining ${course.subjectCode} — course codes are permanent.`}
@@ -1277,17 +1407,25 @@ function EditCourseDialog({
             ))}
           </FilterSelect>
         </Field>
-        <Field label="Semester" error={errors.semesterId}>
+        <Field label="Academic Year" error={errors.academicYearId}>
           <FilterSelect
-            ariaLabel="Select semester"
-            value={form.semesterId}
-            onChange={(v) => set("semesterId", v)}
+            ariaLabel="Select academic year"
+            value={form.academicYearId}
+            onChange={(v) => set("academicYearId", v)}
             fullWidth
           >
-            {semesters.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
+            {/* academic-year groups — three coded intakes per year
+                (2026/2027 → 202605 · May 2026 …) */}
+            {Array.from(new Set(academicYears.map((s) => s.yearCode))).map((yearCode) => (
+              <optgroup key={yearCode} label={`AY ${yearCode}`}>
+                {academicYears
+                  .filter((s) => s.yearCode === yearCode)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+              </optgroup>
             ))}
           </FilterSelect>
         </Field>
@@ -1348,6 +1486,7 @@ function EditCourseDialog({
           tutorialLimit={tutorialLimit}
           practicalLimit={practicalLimit}
           sumWarning={errors.studentSum}
+          sectionRef={sectionRef}
           tutorialGroups={split.tutorialGroups}
           practicalGroups={split.practicalGroups}
           totalGroups={split.totalGroups}
@@ -2040,7 +2179,7 @@ function DeleteCourseDialog({
           {course.subjectCode} · {course.subjectName}
         </p>
         <p className="mt-[2px] text-[12.5px] text-textSecondary">
-          {course.programmeCode ?? "—"} · {course.semesterLabel} · {course.totalHours}h total
+          {course.programmeCode ?? "—"} · {course.academicYearLabel} · {course.totalHours}h total
         </p>
       </div>
 
@@ -2190,7 +2329,7 @@ export default function CoursesPage() {
   const [courses, setCourses] = useState<CourseRow[]>([]);
   const [programmes, setProgrammes] = useState<ProgrammeRow[]>([]);
   const [programmeOptions, setProgrammeOptions] = useState<ProgrammeOption[]>([]);
-  const [semesters, setSemesters] = useState<SemesterOption[]>([]);
+  const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
   const [classSizeRules, setClassSizeRules] = useState<ClassSizeRule[]>([]);
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -2222,22 +2361,34 @@ export default function CoursesPage() {
   const [itemToast, setItemToast] = useState<string | null>(null);
 
   /* floating anchor: course list ⇄ Class-size rules card. Fixed to the
-     viewport and never scrolls away; the label flips once the card top
-     reaches the viewport (also when the user scrolls there by hand) */
+     viewport and never scrolls away; the label flips as soon as the card
+     climbs into the upper half of the screen — via a click's smooth
+     arrival OR the user's own manual scroll (a wheel/scrollbar event
+     listener plus a light periodic check so the flip always follows the
+     real position). The card sits near the page's end where its top can
+     never reach the very top of the window, so a fixed "top <= 120px"
+     test would never fire on shorter pages — half-viewport is the
+     length-independent rule. */
   const rulesAnchorRef = useRef<HTMLDivElement | null>(null);
   const [atRules, setAtRules] = useState(false);
   const navigatingRef = useRef(false);
 
   useEffect(() => {
-    const onScroll = () => {
+    const update = () => {
       if (navigatingRef.current) return;
       const el = rulesAnchorRef.current;
       if (!el) return;
-      setAtRules(el.getBoundingClientRect().top <= 120);
+      setAtRules(el.getBoundingClientRect().top <= window.innerHeight * 0.5);
     };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    /* manual scrolling through some paths never reaches the window's
+       scroll event — polling keeps the label glued to the position */
+    const poll = window.setInterval(update, 150);
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.clearInterval(poll);
+    };
   }, []);
 
   const jumpRulesOrTop = () => {
@@ -2268,7 +2419,7 @@ export default function CoursesPage() {
       if (c && c.ok) {
         setCourses(c.courses as CourseRow[]);
         setProgrammeOptions(c.programmes as ProgrammeOption[]);
-        setSemesters(c.semesters as SemesterOption[]);
+        setAcademicYears(c.academicYears as AcademicYearOption[]);
         setClassSizeRules((c.classSizeRules ?? []) as ClassSizeRule[]);
       } else {
         failed = true;
@@ -2561,7 +2712,7 @@ export default function CoursesPage() {
                     Programme
                   </p>
                   <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Semester
+                    Academic Year
                   </p>
                   <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                     Hours (L · T · P)
@@ -2622,9 +2773,9 @@ export default function CoursesPage() {
                           )}
                         </p>
 
-                        {/* semester */}
+                        {/* academic year */}
                         <p className="min-w-0 text-[12.5px] leading-snug text-textNormal">
-                          {c.semesterLabel}
+                          {c.academicYearLabel}
                         </p>
 
                         {/* hours */}
@@ -2832,7 +2983,7 @@ export default function CoursesPage() {
         <AddCourseDialog
           courses={courses}
           programmes={programmeOptions}
-          semesters={semesters}
+          academicYears={academicYears}
           classSizeRules={classSizeRules}
           onClose={() => setAddCourseOpen(false)}
           onSaved={(toast) =>
@@ -2844,7 +2995,7 @@ export default function CoursesPage() {
         <EditCourseDialog
           course={editingCourse}
           programmes={programmeOptions}
-          semesters={semesters}
+          academicYears={academicYears}
           classSizeRules={classSizeRules}
           onClose={() => setEditingCourse(null)}
           onSaved={(toast) =>

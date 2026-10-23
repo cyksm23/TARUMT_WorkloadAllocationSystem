@@ -6,7 +6,7 @@
  * frontend/src/app/api/lecturers/[staffId]/route.ts.
  *
  * Full roster straight from PostgreSQL: lecturers joined with their
- * department and linked login account, plus a per-lecturer semester
+ * department and linked login account, plus a per-lecturer academic-year
  * workload roll-up. Each lecturer carries a materialized limit pair that is
  * seeded once and then snapshot-stable; rules edits never rewrite it — pairs
  * that drift from (or stand outside) the current rules surface as ⚠.
@@ -70,7 +70,7 @@ router.get("/", async (_req: Request, res: Response) => {
         u.username,
         (SELECT COUNT(*)::int
            FROM workloads w
-          WHERE w.lecturer_id = l.id)                                AS semester_records,
+          WHERE w.lecturer_id = l.id)                     AS academic_year_records,
         (SELECT COALESCE(SUM(w.total_allocated_hours), 0)::float8
            FROM workloads w
           WHERE w.lecturer_id = l.id)                                AS allocated_hours
@@ -114,7 +114,7 @@ router.get("/", async (_req: Request, res: Response) => {
       departmentCode: r.department_code,
       departmentName: r.department_name,
       username: r.username,
-      semesterRecords: Number(r.semester_records ?? 0),
+      academicYearRecords: Number(r.academic_year_records ?? 0),
       allocatedHours: Number(r.allocated_hours ?? 0),
     }));
 

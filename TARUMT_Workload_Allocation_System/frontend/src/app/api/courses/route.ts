@@ -35,15 +35,22 @@ function getPool(): Pool {
 
 export async function GET() {
   try {
+    /* future academic years provision themselves ahead of time — while the
+       last seeded intake ends within ~6 months, the next academic year and
+       its three coded terms (e.g. 2028 → 202805 / 202809 / 202901) appear */
+    const provisioned = await getPool().query("SELECT ensure_academic_year_horizon() AS created");
+    const createdCount = Number(provisioned.rows[0]?.created ?? 0);
+    if (createdCount > 0) {
+      console.log(`ensure_academic_year_horizon: auto-created ${createdCount} academic year(s)`);
+    }
     const { rows } = await getPool().query(`
       SELECT s.subject_code                         AS "subjectCode",
              s.subject_name                         AS "subjectName",
              p.programme_code                       AS "programmeCode",
              COALESCE(p.programme_name, '—')        AS "programmeName",
-             s.semester_id                          AS "semesterId",
-             COALESCE(sy.semester_code || ' · ' || sy.semester_name
-               || ' · ' || sy.week_count || ' weeks', '—')
-                                                    AS "semesterLabel",
+             s.academic_year_id                          AS "academicYearId",
+             COALESCE(t.term_code || ' · AY ' || ay.year_code, '—')
+                                                    AS "academicYearLabel",
              s.credit_hours                         AS "creditHours",
              s.lecture_hours                        AS "lectureHours",
              s.tutorial_hours                       AS "tutorialHours",
@@ -56,7 +63,8 @@ export async function GET() {
              s.is_active                            AS "isActive"
         FROM subjects s
         LEFT JOIN programmes p ON p.id = s.programme_id
-        LEFT JOIN semesters sy ON sy.id = s.semester_id
+        LEFT JOIN academic_year_terms t ON t.id = s.academic_year_id
+        LEFT JOIN academic_years ay ON ay.id = t.academic_year_id
        ORDER BY s.subject_code
     `);
     const { rows: programmes } = await getPool().query(`
@@ -65,17 +73,15 @@ export async function GET() {
        WHERE p.is_active
        ORDER BY p.programme_code
     `);
-    /* one canonical row per semester code (the three TARUMT semesters
-       S1 / S2 / S3 exist once per academic year — dedupe to the earliest
-       year's row so the picker shows exactly 3 options); labels mention
-       the week count (S1 14 wks · S2 7 wks · S3 14 wks) */
-    const { rows: semesters } = await getPool().query(`
-      SELECT DISTINCT ON (semester_code)
-             id,
-             semester_code || ' · ' || semester_name
-               || ' · ' || week_count || ' weeks' AS label
-        FROM semesters
-       ORDER BY semester_code, id
+    /* every coded term of every academic year (202605 · May 2026, 202609
+       · September 2026, …) — the picker groups them under their year */
+    const { rows: academicYears } = await getPool().query(`
+      SELECT t.id,
+             t.term_code || ' · ' || t.term_name AS label,
+             ay.year_code                        AS "yearCode"
+        FROM academic_year_terms t
+        JOIN academic_years ay ON ay.id = t.academic_year_id
+       ORDER BY ay.year_code, t.term_code
     `);
     /* flexible class-size limits — the course dialog derives group splits
        from these (Tutorial / Practical) */
@@ -85,7 +91,7 @@ export async function GET() {
        WHERE is_active
        ORDER BY class_type
     `);
-    return NextResponse.json({ ok: true, courses: rows, programmes, semesters, classSizeRules });
+    return NextResponse.json({ ok: true, courses: rows, programmes, academicYears, classSizeRules });
   } catch (err) {
     console.error("GET /api/courses failed:", err);
     return NextResponse.json(
@@ -115,15 +121,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: "Course name is required." }, { status: 400 });
   }
 
-  /* programme + semester references */
+  /* programme + academic year references */
   const programmeCode =
     typeof body.programmeCode === "string" ? body.programmeCode.trim().toUpperCase() : "";
   if (!programmeCode) {
     return NextResponse.json({ ok: false, message: "Programme is required." }, { status: 400 });
   }
-  const semesterId = Number(body.semesterId);
-  if (!Number.isInteger(semesterId) || semesterId <= 0) {
-    return NextResponse.json({ ok: false, message: "Semester is required." }, { status: 400 });
+  const academicYearId = Number(body.academicYearId);
+  if (!Number.isInteger(academicYearId) || academicYearId <= 0) {
+    return NextResponse.json({ ok: false, message: "Academic year is required." }, { status: 400 });
   }
 
   /* hour components — one decimal place max, non-negative */
@@ -196,16 +202,16 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const semRows = await getPool().query("SELECT id FROM semesters WHERE id = $1 LIMIT 1", [
-      semesterId,
+    const semRows = await getPool().query("SELECT id FROM academic_year_terms WHERE id = $1 LIMIT 1", [
+      academicYearId,
     ]);
     if (semRows.rows.length === 0) {
-      return NextResponse.json({ ok: false, message: "Unknown semester." }, { status: 400 });
+      return NextResponse.json({ ok: false, message: "Unknown academic year." }, { status: 400 });
     }
 
     const insert = await getPool().query(
       `INSERT INTO subjects
-         (subject_code, subject_name, programme_id, semester_id,
+         (subject_code, subject_name, programme_id, academic_year_id,
           credit_hours, lecture_hours, tutorial_hours, practical_hours, total_hours,
           tutorial_students, practical_students, student_count, group_count, is_active)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -214,7 +220,7 @@ export async function POST(request: Request) {
         code,
         name,
         prog.id,
-        semesterId,
+        academicYearId,
         Math.round((body.creditHours === undefined ? 3 : Number(body.creditHours)) * 10) / 10,
         hours.lecture,
         hours.tutorial,
@@ -240,7 +246,7 @@ export async function POST(request: Request) {
     }
     if ((err as { code?: string }).code === "23503") {
       return NextResponse.json(
-        { ok: false, message: "Unknown programme or semester reference." },
+        { ok: false, message: "Unknown programme or academic year reference." },
         { status: 400 },
       );
     }

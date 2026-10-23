@@ -3,7 +3,7 @@
 /**
  * PROGRAMME LEADER DASHBOARD — the coordinator's home screen.
  *
- * Top: welcome + semester context. Then four live KPI cards (real counters
+ * Top: welcome + academic-year context. Then four live KPI cards (real counters
  * from GET /api/dashboard/summary → PostgreSQL), a workload-balance strip
  * (theme.docx status-badge palette) and a launcher grid for every function
  * module from the FYP document (Table 1.4.1.1).
@@ -38,7 +38,7 @@ interface Summary {
     academicYears: number;
     programs: number;
     activeSubjects: number;
-    semesters: number;
+    academicYearTerms: number;
   };
   allocations: {
     total: number;
@@ -100,7 +100,7 @@ const MODULE_LAUNCHERS: Array<{
     label: "Course Suggestion",
     href: "/suggestions",
     icon: History,
-    description: "Reuse the previous academic year's semester allocations as editable suggestions.",
+    description: "Reuse the previous academic year's term allocations as editable suggestions.",
   },
 ];
 
@@ -161,7 +161,7 @@ export default function DashboardPage() {
             </p>
           </div>
           <span className="rounded-badge bg-primaryLight px-md py-sm text-[12.5px] font-semibold text-primary">
-            2026/2027 · Semester 1
+            2026/2027 · 202609
           </span>
         </div>
       </FadeContent>

@@ -18,19 +18,20 @@ CREATE TABLE academic_years (
     updated_at  TIMESTAMP    DEFAULT NOW()
 );
 
--- 2) semesters -----------------------------------------------
-CREATE TABLE semesters (
+-- 2) academic_year_terms — the coded intake terms (202605 · May 2026, …)
+--    each belonging to an academic year
+CREATE TABLE academic_year_terms (
     id               SERIAL PRIMARY KEY,
     academic_year_id INTEGER      NOT NULL REFERENCES academic_years(id) ON DELETE RESTRICT,
-    semester_name    VARCHAR(50)  NOT NULL,
-    semester_code    VARCHAR(20)  NOT NULL,
+    term_name        VARCHAR(50)  NOT NULL,
+    term_code        VARCHAR(20)  NOT NULL,
     start_date       DATE         NOT NULL,
     end_date         DATE         NOT NULL,
     week_count       INTEGER      DEFAULT 14,
     is_active        BOOLEAN      DEFAULT FALSE,
     created_at       TIMESTAMP    DEFAULT NOW(),
     updated_at       TIMESTAMP    DEFAULT NOW(),
-    CONSTRAINT uq_semesters_year_code UNIQUE (academic_year_id, semester_code)
+    CONSTRAINT uq_academic_year_terms_code UNIQUE (academic_year_id, term_code)
 );
 
 -- 3) users ---------------------------------------------------
@@ -105,7 +106,7 @@ CREATE TABLE subjects (
     subject_code    VARCHAR(30)  NOT NULL UNIQUE,
     subject_name    VARCHAR(200) NOT NULL,
     programme_id    INTEGER      REFERENCES programmes(id),
-    semester_id     INTEGER      REFERENCES semesters(id),
+    academic_year_id INTEGER     REFERENCES academic_year_terms(id),
     credit_hours    NUMERIC(4,1) DEFAULT 3.0,
     lecture_hours   NUMERIC(4,1) DEFAULT 2.0,
     tutorial_hours  NUMERIC(4,1) DEFAULT 1.0,
@@ -124,7 +125,7 @@ CREATE TABLE subjects (
 CREATE TABLE workloads (
     id                    SERIAL PRIMARY KEY,
     lecturer_id           INTEGER      NOT NULL REFERENCES lecturers(id) ON DELETE CASCADE,
-    semester_id           INTEGER      NOT NULL REFERENCES semesters(id) ON DELETE CASCADE,
+    academic_year_id      INTEGER      NOT NULL REFERENCES academic_year_terms(id) ON DELETE RESTRICT,
     total_allocated_hours NUMERIC(5,2) DEFAULT 0.00,
     status                VARCHAR(20)  NOT NULL DEFAULT 'DRAFT',
         CHECK (status IN ('DRAFT','PENDING','APPROVED','REJECTED')),
@@ -133,7 +134,7 @@ CREATE TABLE workloads (
     remarks               TEXT         NULL,
     created_at            TIMESTAMP    DEFAULT NOW(),
     updated_at            TIMESTAMP    DEFAULT NOW(),
-    CONSTRAINT uq_workload_lecturer_semester UNIQUE (lecturer_id, semester_id)
+    CONSTRAINT uq_workload_lecturer_year UNIQUE (lecturer_id, academic_year_id)
 );
 
 -- 9) workload_details --------------------------------------
@@ -207,14 +208,115 @@ INSERT INTO workload_rules (rule_key, label, basis, priority, min_hours, max_hou
 -- ============================================================CREATE INDEX idx_lecturers_department       ON lecturers(department_id);
 CREATE INDEX idx_lecturers_staff_id         ON lecturers(staff_id);
 CREATE INDEX idx_subjects_programme         ON subjects(programme_id);
-CREATE INDEX idx_subjects_semester          ON subjects(semester_id);
+CREATE INDEX idx_subjects_academic_year     ON subjects(academic_year_id);
 CREATE INDEX idx_workloads_lecturer         ON workloads(lecturer_id);
-CREATE INDEX idx_workloads_semester         ON workloads(semester_id);
+CREATE INDEX idx_workloads_academic_year    ON workloads(academic_year_id);
 CREATE INDEX idx_workloads_status           ON workloads(status);
 CREATE INDEX idx_workload_details_workload  ON workload_details(workload_id);
 CREATE INDEX idx_workload_details_subject   ON workload_details(subject_id);
-CREATE INDEX idx_semesters_active           ON semesters(is_active)      WHERE is_active = TRUE;
+CREATE INDEX idx_academic_year_terms_active ON academic_year_terms(is_active) WHERE is_active = TRUE;
 CREATE INDEX idx_academic_years_active      ON academic_years(is_active) WHERE is_active = TRUE;
+
+-- ============================================================
+-- FUNCTIONS (1)
+-- ============================================================
+-- Future academic years generate themselves ahead of time:
+-- ensure_academic_year_horizon() creates the next academic year with its
+-- three coded terms (e.g. 2028/2029 → 202805, 202809, 202901) whenever the
+-- last seeded intake ends within ~6 months. Codes derive Y05 / Y09 / (Y+1)01,
+-- starts follow the intake pattern (2nd Mon May, 3rd Mon Sep, 2nd Mon Jan),
+-- 14 weeks each, all generated rows inactive. The course directory endpoint
+-- calls this on every read, so the catalogue never runs out of future
+-- academic years without any manual step.
+CREATE FUNCTION ensure_academic_year_horizon(
+    p_horizon DATE DEFAULT CURRENT_DATE + 180
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_last_end  DATE;
+    v_last_code TEXT;
+    v_base_year INTEGER;        -- the academic year about to be generated
+    v_year_code TEXT;
+    v_year_id   INTEGER;
+    v_dow       INTEGER;        -- weekday of a month's 1st (0=Sun..6=Sat)
+    v_may_start    DATE;
+    v_sept_start   DATE;
+    v_jan_start    DATE;
+    v_code      TEXT;
+    v_name      TEXT;
+    v_created   INTEGER := 0;
+BEGIN
+    SELECT COALESCE(MAX(end_date), DATE '1970-01-01'),
+           (SELECT MAX(term_code) FROM academic_year_terms)
+      INTO v_last_end, v_last_code
+      FROM academic_year_terms;
+
+    -- nothing seeded yet — the reference-data seeds own that job
+    IF v_last_code IS NULL THEN
+        RETURN 0;
+    END IF;
+
+    -- next academic year starts in Y = code year of the last intake,
+    -- unless the last intake was a January term (then Y is that year)
+    v_base_year := SUBSTRING(v_last_code, 1, 4)::INTEGER;
+    IF v_last_code NOT LIKE '____01' THEN
+        v_base_year := v_base_year + 1;
+    END IF;
+
+    WHILE v_last_end < p_horizon AND v_created < 5 LOOP
+        v_year_code := v_base_year::TEXT || '/' || (v_base_year + 1)::TEXT;
+
+        /* intake starts (2nd Monday of May, 3rd Monday of September,
+           2nd Monday of January) — calendar math only */
+        v_dow := EXTRACT(DOW FROM make_date(v_base_year, 5, 1))::INTEGER;
+        v_may_start := make_date(v_base_year, 5, 1) + ((8 - v_dow) % 7) + 7;
+        v_dow := EXTRACT(DOW FROM make_date(v_base_year, 9, 1))::INTEGER;
+        v_sept_start := make_date(v_base_year, 9, 1) + ((8 - v_dow) % 7) + 14;
+        v_dow := EXTRACT(DOW FROM make_date(v_base_year + 1, 1, 1))::INTEGER;
+        v_jan_start := make_date(v_base_year + 1, 1, 1) + ((8 - v_dow) % 7) + 7;
+
+        /* academic year row: spans May intake to January intake */
+        INSERT INTO academic_years (year_code, start_date, end_date, is_active)
+        VALUES (v_year_code, v_may_start, v_jan_start + 90, FALSE)
+        ON CONFLICT (year_code) DO NOTHING;
+
+        SELECT id INTO v_year_id FROM academic_years WHERE year_code = v_year_code;
+
+        /* May intake */
+        v_code := v_base_year::TEXT || '05';
+        v_name := 'May ' || v_base_year::TEXT;
+        INSERT INTO academic_year_terms
+            (academic_year_id, term_name, term_code, start_date, end_date, week_count, is_active)
+        VALUES (v_year_id, v_name, v_code, v_may_start, v_may_start + 90, 14, FALSE)
+        ON CONFLICT (academic_year_id, term_code) DO NOTHING;
+
+        /* September intake */
+        v_code := v_base_year::TEXT || '09';
+        v_name := 'September ' || v_base_year::TEXT;
+        INSERT INTO academic_year_terms
+            (academic_year_id, term_name, term_code, start_date, end_date, week_count, is_active)
+        VALUES (v_year_id, v_name, v_code, v_sept_start, v_sept_start + 90, 14, FALSE)
+        ON CONFLICT (academic_year_id, term_code) DO NOTHING;
+
+        /* January intake of the following calendar year */
+        v_code := (v_base_year + 1)::TEXT || '01';
+        v_name := 'January ' || (v_base_year + 1)::TEXT;
+        INSERT INTO academic_year_terms
+            (academic_year_id, term_name, term_code, start_date, end_date, week_count, is_active)
+        VALUES (v_year_id, v_name, v_code, v_jan_start, v_jan_start + 90, 14, FALSE)
+        ON CONFLICT (academic_year_id, term_code) DO NOTHING;
+
+        v_created   := v_created + 1;
+        v_base_year := v_base_year + 1;
+        v_last_end  := (SELECT MAX(end_date) FROM academic_year_terms
+                          WHERE academic_year_id = v_year_id);
+    END LOOP;
+
+    RETURN v_created;
+END;
+$$;
 
 -- ============================================================
 -- VIEWS (3)
@@ -252,15 +354,15 @@ SELECT
     l.employment_type,
     r.rule_key,
     rr.label              AS rule_label,
-    r.min_hours           AS rule_min_hours,
-    r.max_hours           AS rule_max_hours,
+    rr.min_hours          AS rule_min_hours,
+    rr.max_hours          AS rule_max_hours,
     l.min_limit_hours     AS min_workload_hours,
     l.max_limit_hours     AS max_workload_hours,
     d.department_code,
     d.department_name,
     ay.year_code,
-    s.id  AS semester_id,
-    s.semester_code,
+    t.id  AS academic_year_id,
+    t.term_code,
     w.id  AS workload_id,
     w.total_allocated_hours,
     w.status,
@@ -270,8 +372,8 @@ JOIN resolved         r  ON r.lecturer_id = l.id
 JOIN workload_rules   rr ON rr.rule_key = r.rule_key
 LEFT JOIN departments   d  ON d.id = l.department_id
 LEFT JOIN workloads     w  ON w.lecturer_id = l.id
-LEFT JOIN semesters     s  ON s.id = w.semester_id
-LEFT JOIN academic_years ay ON ay.id = s.academic_year_id;
+LEFT JOIN academic_year_terms t ON t.id = w.academic_year_id
+LEFT JOIN academic_years ay ON ay.id = t.academic_year_id;
 
 -- b) per-lecturer subject allocation with activity breakdown
 CREATE VIEW vw_subject_allocation AS
@@ -281,7 +383,7 @@ SELECT
     l.staff_id,
     l.full_name,
     ay.year_code,
-    sem.semester_code,
+    t.term_code,
     sub.id           AS subject_id,
     sub.subject_code,
     sub.subject_name,
@@ -297,8 +399,8 @@ JOIN workloads  w   ON w.id = wd.workload_id
 JOIN lecturers  l   ON l.id = w.lecturer_id
 JOIN subjects   sub ON sub.id = wd.subject_id
 LEFT JOIN programmes p ON p.id = sub.programme_id
-JOIN semesters  sem ON sem.id = w.semester_id
-JOIN academic_years ay ON ay.id = sem.academic_year_id;
+JOIN academic_year_terms t ON t.id = w.academic_year_id
+JOIN academic_years ay ON ay.id = t.academic_year_id;
 
 -- c) aggregated workload stats per department
 CREATE VIEW vw_department_workload AS

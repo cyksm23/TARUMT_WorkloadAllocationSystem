@@ -95,7 +95,7 @@ Business rules baked into the schema: weekly teaching-hour limits
 (Diploma 16h, Bachelor 16h, Bachelor + Diploma 16-17h, Programme Leader
 11-12h → OT claim), practical split > 28 students, tutorial split >
 36 students, 1 moderator + max 9 samples per course, lab courses track
-Lab 1 / Lab 2 / 3rd remarks, semester suggestion engine (same semester
-last year, e.g. 2025/05 → 2024/05).
+Lab 1 / Lab 2 / 3rd remarks, academic-year intake suggestion engine (same
+intake last year, e.g. 202505 → 202605).
 
 See `docs/system-architecture.md` for architecture, data flow and the design system.

@@ -2,7 +2,7 @@
 
 /**
  * TOPNAV — 64px header (theme.docx specs): white, 1px #E5E5EA bottom border.
- * Right: active-semester selector + user chip + sign out.
+ * Right: active-academic-year selector + user chip + sign out.
  * (The system brand lives in the sidebar now — TARUMT Workload Allocation.)
  */
 
@@ -32,17 +32,19 @@ export default function TopNav({ session }: TopNavProps) {
   return (
     <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-end gap-md border-b border-divider bg-surface px-md">
       <div className="flex items-center gap-md">
-        {/* active-semester context selector */}
+        {/* active-term context selector */}
         <div className="relative hidden sm:block">
           <select
-            aria-label="Active semester"
-            defaultValue="2026-1"
+            aria-label="Active academic year"
+            defaultValue="202609"
             className="h-9 appearance-none rounded-button border border-divider bg-surface pl-md pr-8 text-[13px] font-medium text-textNormal outline-none transition-colors hover:bg-background focus:border-primary"
           >
-            <option value="2026-1">2026/2027 · Semester 1</option>
-            <option value="2026-2">2026/2027 · Semester 2</option>
-            <option value="2025-1">2025/2026 · Semester 1</option>
-            <option value="2025-2">2025/2026 · Semester 2</option>
+            <option value="202605">2026/2027 · 202605</option>
+            <option value="202609">2026/2027 · 202609</option>
+            <option value="202701">2026/2027 · 202701</option>
+            <option value="202705">2027/2028 · 202705</option>
+            <option value="202709">2027/2028 · 202709</option>
+            <option value="202801">2027/2028 · 202801</option>
           </select>
           <ChevronDown
             size={14}
