@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Pool } from "pg";
+import { checkTeachingHourLimits, lockAssignmentWrites } from "@/lib/server/auto-assignment";
 
 /**
  * Same-origin fallback twin of backend-express routes/allocations.ts
@@ -101,6 +102,7 @@ const loadSubject = async (client: DbClient, code: string) => {
       FROM subjects s
       LEFT JOIN programmes p ON p.id = s.programme_id
      WHERE s.subject_code = $1
+     FOR SHARE OF s
     `,
     [code],
   );
@@ -227,6 +229,7 @@ export async function PUT(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await lockAssignmentWrites(client);
 
     const subject = await loadSubject(client, code);
     if (!subject) {
@@ -265,6 +268,12 @@ export async function PUT(
     if (capError) {
       await client.query("ROLLBACK");
       return NextResponse.json({ ok: false, message: capError }, { status: 409 });
+    }
+
+    const hourError = await checkTeachingHourLimits(client, subject, slots);
+    if (hourError) {
+      await client.query("ROLLBACK");
+      return NextResponse.json({ ok: false, message: hourError }, { status: 409 });
     }
 
     await client.query(
@@ -334,6 +343,7 @@ export async function DELETE(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await lockAssignmentWrites(client);
     const subject = await loadSubject(client, code);
     if (!subject) {
       await client.query("ROLLBACK");

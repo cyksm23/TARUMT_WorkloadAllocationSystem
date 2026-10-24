@@ -5,8 +5,9 @@
  * Programme Leader's workbench where each course's teaching slots get
  * assigned to lecturers. Policy enforced at save time by the API:
  * max 3 distinct courses per lecturer in Bachelor programmes and 4 in
- * Diploma programmes; only active lecturers; the course must carry a
- * academic year; hour totals are resummed into workloads.total_allocated_hours.
+ * Diploma programmes; stored maximum weekly hours per academic year;
+ * only active lecturers; the course must carry an academic year; hour
+ * totals are resummed into workloads.total_allocated_hours.
  *
  * Assignment model:
  *   · the initial ASSIGN picks ONE lecturer who takes all three slots;
@@ -21,29 +22,29 @@
  */
 
 import {
-  Children,
-  isValidElement,
   useEffect,
   useMemo,
-  useRef,
   useState,
-  type ReactNode,
 } from "react";
 import {
-  ArrowDownUp,
   Check,
-  ChevronDown,
   ClipboardList,
   Eye,
   Loader2,
   Pencil,
   RefreshCcw,
+  Search,
   TriangleAlert,
   X,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { apiFetch } from "@/services/apiClient";
 import Toast from "@/components/toast/Toast";
+import AutoAssignDialog from "@/components/allocations/AutoAssignDialog";
+import AutoAssignIcon from "@/components/allocations/AutoAssignIcon";
+import FilterSelect from "@/components/ui/FilterSelect";
+import { SortableGridHeader } from "@/components/ui/SortableTableHeader";
+import useTableSortAnimation from "@/components/ui/useTableSortAnimation";
+import { sortByCriteria, toggleSortCriterion, type SortCriterion } from "@/lib/multi-sort";
 
 /* ── data types ──────────────────────────────────────────────────────────── */
 
@@ -103,26 +104,17 @@ interface AllocationRow {
 
 /* ── shared bits ─────────────────────────────────────────────────────────── */
 
-type Triage = "all" | "active" | "inactive";
+type Triage = "all" | "assigned" | "unassigned";
 
-type SortKey =
-  | "code_asc"
-  | "code_desc"
-  | "name_asc"
-  | "name_desc"
-  | "hours_desc"
-  | "students_desc";
+type SortKey = "course";
 
-const SORTERS: Record<SortKey, (a: CourseRow, b: CourseRow) => number> = {
-  code_asc: (a, b) => a.subjectCode.localeCompare(b.subjectCode),
-  code_desc: (a, b) => b.subjectCode.localeCompare(a.subjectCode),
-  name_asc: (a, b) => a.subjectName.localeCompare(b.subjectName),
-  name_desc: (a, b) => b.subjectName.localeCompare(a.subjectName),
-  hours_desc: (a, b) =>
-    b.totalHours - a.totalHours || a.subjectCode.localeCompare(b.subjectCode),
-  students_desc: (a, b) =>
-    b.studentCount - a.studentCount || a.subjectCode.localeCompare(b.subjectCode),
+const SORT_LABELS: Record<SortKey, string> = {
+  course: "Course",
 };
+
+const compareCourseIdentity = (a: CourseRow, b: CourseRow) =>
+  a.subjectCode.localeCompare(b.subjectCode, undefined, { numeric: true }) ||
+  a.subjectName.localeCompare(b.subjectName);
 
 const EMPLOYMENT_LABEL: Record<string, string> = {
   FULL_TIME: "Full-time",
@@ -148,179 +140,7 @@ const ROSTER_GRID =
 
 /* ── themed controls (same look as the module rosters) ───────────────────── */
 
-/**
- * Themed filter dropdown — palette menu surface; options are declared with
- * <option value="…">Label</option> children.
- */
-function FilterSelect({
-  ariaLabel,
-  value,
-  onChange,
-  icon: Icon,
-  children,
-}: {
-  ariaLabel: string;
-  value: string;
-  onChange: (v: string) => void;
-  icon?: LucideIcon;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  /* measured at open: the tallest the list may render while staying
-     INSIDE its clipping card — an overlong menu would grow the dialog's
-     scroll area ("the whole dialog scrolling"), so the list scrolls
-     itself instead. Placement is consistently BELOW the trigger (the
-     list just gets shorter near the dialog bottom, e.g. Practical). */
-  const [menuMaxH, setMenuMaxH] = useState(288);
-  /* live search inside the open menu — narrows the entries as you type */
-  const [term, setTerm] = useState("");
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  const toggle = () => {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    const root = rootRef.current;
-    let maxH = 288;
-    if (root) {
-      const rect = root.getBoundingClientRect();
-      /* nearest ancestor that clips the menu (the dialog's card);
-         page-level selects fall back to the viewport bounds */
-      let bounds: { top: number; bottom: number } | null = null;
-      let el: HTMLElement | null = root.parentElement;
-      while (el) {
-        const oy = window.getComputedStyle(el).overflowY;
-        if (oy === "auto" || oy === "scroll") {
-          const r = el.getBoundingClientRect();
-          bounds = { top: r.top, bottom: r.bottom };
-          break;
-        }
-        el = el.parentElement;
-      }
-      const clipBottom = bounds ? bounds.bottom : window.innerHeight - 8;
-      maxH = Math.min(288, Math.max(120, Math.floor(clipBottom - rect.bottom - 16)));
-    }
-    setMenuMaxH(maxH);
-    setTerm("");
-    setOpen(true);
-  };
-
-  /* flatten the <option> children into {value,label} menu entries */
-  const options = Children.toArray(children)
-    .filter(isValidElement)
-    .map((el) => {
-      const props = el.props as { value?: unknown; children?: ReactNode };
-      return {
-        value: String(props.value ?? ""),
-        label: String(props.children ?? props.value ?? ""),
-      };
-    });
-  const selected = options.find((o) => o.value === value) ?? options[0];
-  const searched = term.trim().toLowerCase();
-  const visibleOptions = searched
-    ? options.filter((o) => o.label.toLowerCase().includes(searched))
-    : options;
-
-  /* close on outside click or Escape */
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onPointer);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onPointer);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative">
-      {/* trigger button — shows the selected label, chevron spins when open */}
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={ariaLabel}
-        onClick={toggle}
-        className={`flex h-9 w-full items-center gap-xs whitespace-nowrap rounded-button border bg-surface pl-md pr-8 text-[13px] font-medium text-textNormal outline-none transition-colors sm:w-auto ${
-          open ? "border-primary" : "border-divider hover:bg-background"
-        }`}
-      >
-        {Icon && <Icon size={14} className="shrink-0 text-textSecondary" />}
-        <span className="min-w-0 flex-1 truncate text-left" title={selected?.label}>
-          {selected?.label ?? "—"}
-        </span>
-        <span
-          className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-textSecondary transition-transform duration-200 ${
-            open ? "rotate-180" : ""
-          }`}
-        >
-          <ChevronDown size={14} />
-        </span>
-      </button>
-
-      {/* palette-themed menu panel — pinned search, the list scrolls itself */}
-      {open && (
-        <div className="animate-[menuIn_0.18s_ease-out_both] absolute left-0 top-full z-30 mt-xs w-max min-w-full origin-top-left overflow-hidden rounded-card border border-divider bg-surface shadow-card">
-          <div className="border-b border-divider p-xs">
-            <input
-              type="text"
-              value={term}
-              onChange={(e) => setTerm(e.target.value)}
-              placeholder="Search…"
-              aria-label={`Search — ${ariaLabel}`}
-              className="h-9 w-full min-w-[220px] rounded-button border border-divider bg-background px-md text-[12.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
-            />
-          </div>
-          <div
-            role="listbox"
-            aria-label={ariaLabel}
-            className="py-xs"
-            style={{ maxHeight: Math.max(96, menuMaxH - 54), overflowY: "auto" }}
-          >
-            {visibleOptions.map((o) => {
-              const active = o.value === value;
-              return (
-                <button
-                  key={o.value}
-                  type="button"
-                  role="option"
-                  aria-selected={active}
-                  title={o.label}
-                  onClick={() => {
-                    onChange(o.value);
-                    setOpen(false);
-                  }}
-                  className={`flex h-9 w-full items-center gap-sm whitespace-nowrap px-md text-left text-[13px] transition-colors ${
-                    active
-                      ? "bg-primaryLight font-semibold text-primary"
-                      : "font-medium text-textNormal hover:bg-hoverBg"
-                  }`}
-                >
-                  {o.label}
-                  {active && <Check size={14} className="ml-auto shrink-0" />}
-                </button>
-              );
-            })}
-            {visibleOptions.length === 0 && (
-              <p className="px-md py-md text-[12.5px] italic text-textSecondary">
-                No match for “{term.trim()}”
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** count-filter chip (triage: All / Active / Inactive) */
+/** count-filter chip (triage: All / Assigned / Unassigned) */
 function TriageChip({
   label,
   count,
@@ -339,6 +159,7 @@ function TriageChip({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       style={delay === undefined ? undefined : { animationDelay: `${delay}ms` }}
       className={`animate-[badgeIn_0.2s_ease-out_both] flex h-9 items-center gap-xs whitespace-nowrap rounded-badge px-md text-[12.5px] transition-colors ${
         active
@@ -675,8 +496,8 @@ function AssignDialog({
         {/* policy note — mode-aware */}
         <p className="mt-md text-[12.5px] leading-snug text-textNormal">
           {isEdit
-            ? "Every slot keeps one lecturer — switching a select retargets just that slot. The save writes workload_details rows and refuses when a lecturer passes the policy caps."
-            : "One lecturer takes all three slots first — reopen Edit afterwards to give Lecture / Tutorial / Practical to different lecturers. The save writes workload_details rows and refuses when a lecturer passes the policy caps (3 Bachelor / 4 Diploma courses per lecturer)."}
+            ? "Every slot keeps one lecturer — switching a select retargets just that slot. Saving is blocked if a lecturer exceeds their maximum weekly teaching hours or course limits."
+            : "One lecturer takes all three slots first — reopen Edit afterwards to give Lecture / Tutorial / Practical to different lecturers. Saving respects maximum weekly teaching hours and the course limits (3 Bachelor / 4 Diploma courses per lecturer)."}
         </p>
 
         {/* API refusal (policy caps, deactivated lecturers, race conflicts) */}
@@ -744,6 +565,7 @@ export default function AllocationsPage() {
   /* the course whose assign/edit dialog is open */
   const [assigning, setAssigning] = useState<CourseRow | null>(null);
   const [detailCourse, setDetailCourse] = useState<CourseRow | null>(null);
+  const [autoAssignOpen, setAutoAssignOpen] = useState(false);
   /* green completion toast (top-center) */
   const [itemToast, setItemToast] = useState<string | null>(null);
 
@@ -752,11 +574,15 @@ export default function AllocationsPage() {
   const [programme, setProgramme] = useState("all");
   const [academicYears, setAcademicYears] = useState<AcademicYearTerm[]>([]);
   const [academicYear, setAcademicYear] = useState("all");
-  const [sort, setSort] = useState<SortKey>("code_asc");
+  const [sorts, setSorts] = useState<SortCriterion<SortKey>[]>([
+    { key: "course", direction: "asc" },
+  ]);
+  const [query, setQuery] = useState("");
 
   /* load the course directory (same payload the Courses module serves) plus
      the staff directory and the persisted slot assignments */
   useEffect(() => {
+    let cancelled = false;
     setError(null);
     Promise.all([
       apiFetch("/api/courses")
@@ -769,6 +595,7 @@ export default function AllocationsPage() {
         .then((r) => r.json())
         .catch(() => null),
     ]).then(([c, l, a]) => {
+      if (cancelled) return;
       let failed = false;
       if (c && c.ok) {
         setCourses(c.courses as CourseRow[]);
@@ -779,6 +606,8 @@ export default function AllocationsPage() {
       }
       if (l && l.ok) {
         setLecturers(l.lecturers as StaffRow[]);
+      } else {
+        failed = true;
       }
       if (a && a.ok) {
         /* fold one row per (subject, slot) into the page's slot map */
@@ -795,11 +624,12 @@ export default function AllocationsPage() {
           entry[row.activityType] = row.lecturerId;
         });
         setAssignments(map);
+      } else {
+        failed = true;
       }
-      if (failed) {
-        setError("Course directory unavailable — check the API connection.");
-      }
+      setError(failed ? "Course assignment data unavailable — check the API connection." : null);
     });
+    return () => { cancelled = true; };
   }, [reloadTick]);
 
   /** create / edit persist — resolves null on success, error text on refusal */
@@ -851,29 +681,27 @@ export default function AllocationsPage() {
     }
   };
 
-  /* live course filter: status chip + academic year + programme */
+  /* Assignment status follows saved L/T/P records, not the course's active
+     flag. A partially assigned course already has an editable assignment. */
   const matchedCourses = useMemo(() => {
+    const search = query.trim().toLowerCase();
     return courses.filter((c) => {
-      if (status === "active" && !c.isActive) return false;
-      if (status === "inactive" && c.isActive) return false;
+      const assigned = assignments[c.subjectCode] != null;
+      if (status === "assigned" && !assigned) return false;
+      if (status === "unassigned" && assigned) return false;
       if (programme !== "all" && c.programmeCode !== programme) return false;
       if (academicYear !== "all" && String(c.academicYearId) !== academicYear) return false;
+      if (search && ![c.subjectCode, c.subjectName, c.programmeCode ?? "", c.programmeName].some((value) => value.toLowerCase().includes(search))) return false;
       return true;
     });
-  }, [courses, academicYear, programme, status]);
-
-  const sortedCourses = useMemo(
-    () => [...matchedCourses].sort(SORTERS[sort]),
-    [matchedCourses, sort],
-  );
+  }, [courses, assignments, academicYear, programme, status, query]);
 
   const counts = useMemo(
-    () => ({
-      total: courses.length,
-      active: courses.filter((c) => c.isActive).length,
-      inactive: courses.filter((c) => !c.isActive).length,
-    }),
-    [courses],
+    () => {
+      const assigned = courses.filter((course) => assignments[course.subjectCode] != null).length;
+      return { total: courses.length, assigned, unassigned: courses.length - assigned };
+    },
+    [courses, assignments],
   );
 
   /* lecturer id → staff row (names + staffId for the Lecturer column) */
@@ -885,6 +713,31 @@ export default function AllocationsPage() {
     return map;
   }, [lecturers]);
 
+  const sortedCourses = useMemo(() => sortByCriteria(
+    matchedCourses,
+    sorts,
+    {
+      course: compareCourseIdentity,
+    },
+    compareCourseIdentity,
+  ), [matchedCourses, sorts]);
+
+  const { bodyRef, prepareAnimation: prepareSortAnimation } =
+    useTableSortAnimation<HTMLDivElement>(sortedCourses);
+  const toggleSort = (key: SortKey) => {
+    prepareSortAnimation();
+    setSorts((current) => toggleSortCriterion(current, key));
+  };
+  const sortDirection = (key: SortKey) =>
+    sorts.find((criterion) => criterion.key === key)?.direction ?? null;
+  const sortPriority = (key: SortKey) => {
+    const index = sorts.findIndex((criterion) => criterion.key === key);
+    return index < 0 ? undefined : index + 1;
+  };
+  const sortSummary = sorts.length
+    ? `${SORT_LABELS[sorts[0].key]} sorted ${sorts[0].direction === "asc" ? "ascending" : "descending"}.`
+    : "No course-assignment sorting applied. The original directory order is shown.";
+
   /* academic-year filter options — EVERY coded term in the database
      (even terms without courses yet), shown in the roster's own
      "term code · AY year" wording, in year order (SQL pre-sorted) */
@@ -893,25 +746,37 @@ export default function AllocationsPage() {
       academicYears.map((t) => ({
         id: String(t.id),
         display: `${t.label.split(" · ")[0]} · AY ${t.yearCode}`,
+        termDisplay: t.label,
+        yearCode: t.yearCode,
       })),
     [academicYears],
   );
 
-  /* remount key — every filter/sort change (and each reload) replays
-     the row glide-in */
-  const listSignature = `${status}|${programme}|${academicYear}|${sort}|${reloadTick}`;
+  /* Filter/search/reload changes replay row entry. Sorting retains keyed rows
+     so the FLIP transition can move them smoothly between positions. */
+  const listSignature = `${status}|${programme}|${academicYear}|${query}|${reloadTick}`;
 
   return (
     <div className="mx-auto w-full max-w-[1200px]">
       {/* heading */}
-      <div className="animate-[rowIn_0.26s_ease-out_both]">
-        <h1 className="text-[32px] font-bold leading-[40px] tracking-[-0.02em] text-text">
-          Course Assignment
-        </h1>
-        <p className="mt-1 text-[13px] text-textSecondary">
-          Assign lecture, tutorial and practical slots of each course to lecturers ·{" "}
-          {counts.total} course{counts.total === 1 ? "" : "s"} ({counts.active} active)
-        </p>
+      <div className="animate-[rowIn_0.26s_ease-out_both] flex flex-wrap items-end justify-between gap-md">
+        <div>
+          <h1 className="text-[32px] font-bold leading-[40px] tracking-[-0.02em] text-text">
+            Course Assignment
+          </h1>
+          <p className="mt-1 text-[13px] text-textSecondary">
+            Assign lecture, tutorial and practical slots of each course to lecturers ·{" "}
+            {counts.total} course{counts.total === 1 ? "" : "s"} ({counts.assigned} assigned · {counts.unassigned} unassigned)
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAutoAssignOpen(true)}
+          title="Preview assignments by workload, specialization, interest and previous courses"
+          className="flex h-10 items-center gap-xs rounded-button bg-primary px-lg text-[13px] font-semibold text-white transition-colors hover:bg-primaryHover active:scale-[0.97]"
+        >
+          <AutoAssignIcon size={20} /> Auto Assign
+        </button>
       </div>
 
       {error && (
@@ -937,33 +802,37 @@ export default function AllocationsPage() {
           onClick={() => setStatus("all")}
         />
         <TriageChip
-          label="Active"
-          count={counts.active}
+          label="Assigned"
+          count={counts.assigned}
           delay={60}
-          active={status === "active"}
-          onClick={() => setStatus("active")}
+          active={status === "assigned"}
+          onClick={() => setStatus("assigned")}
         />
         <TriageChip
-          label="Inactive"
-          count={counts.inactive}
+          label="Unassigned"
+          count={counts.unassigned}
           delay={120}
-          active={status === "inactive"}
-          onClick={() => setStatus("inactive")}
+          active={status === "unassigned"}
+          onClick={() => setStatus("unassigned")}
         />
         {/* z-20 lifts the cluster above the roster card — the retained
             transform of the entrance animation would otherwise trap the
             dropdown menus' z-index behind the rows below */}
         <div className="animate-[rowIn_0.26s_ease-out_0.18s_both] relative z-20 ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
           <FilterSelect
-            ariaLabel="Filter by academic year"
+            ariaLabel="Filter assignments by academic year term"
             value={academicYear}
             onChange={setAcademicYear}
           >
             <option value="all">All academic years</option>
-            {academicYearOptions.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.display}
-              </option>
+            {Array.from(new Set(academicYearOptions.map((term) => term.yearCode))).map((yearCode) => (
+              <optgroup key={yearCode} label={`AY ${yearCode}`}>
+                {academicYearOptions
+                  .filter((term) => term.yearCode === yearCode)
+                  .map((term) => (
+                    <option key={term.id} value={term.id}>{term.termDisplay}</option>
+                  ))}
+              </optgroup>
             ))}
           </FilterSelect>
           <FilterSelect
@@ -978,21 +847,34 @@ export default function AllocationsPage() {
               </option>
             ))}
           </FilterSelect>
-          <FilterSelect
-            ariaLabel="Sort courses"
-            value={sort}
-            onChange={(v) => setSort(v as SortKey)}
-            icon={ArrowDownUp}
-          >
-            <option value="code_asc">Sort: Code A → Z</option>
-            <option value="code_desc">Sort: Code Z → A</option>
-            <option value="name_asc">Sort: Name A → Z</option>
-            <option value="name_desc">Sort: Name Z → A</option>
-            <option value="hours_desc">Sort: Total hours → high</option>
-            <option value="students_desc">Sort: Students → many</option>
-          </FilterSelect>
+          <div className="flex w-full min-w-0 items-center gap-sm sm:w-auto">
+            <button type="button"
+              onClick={() => { prepareSortAnimation(); setSorts([]); }}
+              disabled={sorts.length === 0}
+              className="flex h-9 items-center gap-xs whitespace-nowrap rounded-badge px-md text-[12.5px] transition-colors border border-divider bg-surface font-medium text-textNormal hover:bg-hoverBg">
+              Clear Sort
+            </button>
+            <div className="relative min-w-0 flex-1 sm:w-[240px] sm:flex-none">
+              <Search size={15} className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary" />
+              <input
+                type="search"
+                aria-label="Search courses"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search code, course or programme…"
+                className="h-9 w-full rounded-button border border-divider bg-surface pl-9 pr-md text-[13px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
+              />
+            </div>
+          </div>
         </div>
       </div>
+
+      <p id="assignment-sort-help" className="sr-only">
+        Use the Academic Year term list to filter assignments. Click Course to change its sorting direction. Use Clear Sort to restore the original order.
+      </p>
+      <p id="assignment-sort-summary" className="sr-only" aria-live="polite" aria-atomic="true">
+        {sortSummary}
+      </p>
 
       {/* roster list */}
       <div className="mt-md overflow-hidden rounded-card bg-surface shadow-card">
@@ -1001,10 +883,10 @@ export default function AllocationsPage() {
         <div className="overflow-x-auto">
           <div className="min-w-[800px]">
             {/* header — identical grid template as the rows below */}
-            <div className={`${ROSTER_GRID} border-b border-divider px-lg py-sm`}>
-              <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                Course
-              </p>
+            <div className={`${ROSTER_GRID} border-b border-divider bg-surface px-lg py-sm`}>
+              <SortableGridHeader label="Course" direction={sortDirection("course")}
+                priority={sortPriority("course")} onSort={() => toggleSort("course")}
+                description="Sort by course code, then course name" />
               <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                 Programme
               </p>
@@ -1019,7 +901,7 @@ export default function AllocationsPage() {
               </p>
             </div>
 
-            <div key={listSignature}>
+            <div ref={bodyRef} key={listSignature}>
               {courses.length === 0 && !error ? (
                 <div className="animate-[rowIn_0.26s_ease-out_both] flex items-center gap-sm px-lg py-xl">
                   <ClipboardList size={18} className="shrink-0 text-textSecondary" />
@@ -1031,7 +913,7 @@ export default function AllocationsPage() {
                 <div className="animate-[rowIn_0.26s_ease-out_both] px-lg py-xl text-center">
                   <p className="text-[14px] font-medium text-textNormal">No course found</p>
                   <p className="mt-1 text-[12.5px] text-textSecondary">
-                    No course matches the selected filters.
+                    {query.trim() ? "No course matches your search and selected filters." : "No course matches the selected filters."}
                   </p>
                 </div>
               ) : (
@@ -1040,6 +922,7 @@ export default function AllocationsPage() {
                   return (
                     <div
                       key={c.subjectCode}
+                      data-sort-motion={`assignment:${c.subjectCode}`}
                       style={{ animationDelay: `${Math.min(i * 22, 440)}ms` }}
                       className={`${ROSTER_GRID} animate-[rowIn_0.26s_ease-out_both] border-b border-divider px-lg py-md transition-colors last:border-b-0 hover:bg-hoverBg/60`}
                     >
@@ -1075,14 +958,11 @@ export default function AllocationsPage() {
                       {/* lecturers — one name when every slot shares the same
                           lecturer, an L/T/P breakdown once slots are split */}
                       <div className="min-w-0">
-                        {!slotsOf ||
-                        !lectById[slotsOf.LECTURE] ||
-                        !lectById[slotsOf.TUTORIAL] ||
-                        !lectById[slotsOf.PRACTICAL] ? (
+                        {!slotsOf ? (
                           <p className="text-[12px] italic text-textDisabled">
                             Not assigned yet
                           </p>
-                        ) : slotsOf.LECTURE === slotsOf.TUTORIAL &&
+                        ) : lectById[slotsOf.LECTURE] && slotsOf.LECTURE === slotsOf.TUTORIAL &&
                           slotsOf.TUTORIAL === slotsOf.PRACTICAL ? (
                           /* single lecturer teaching every slot */
                           <>
@@ -1100,12 +980,12 @@ export default function AllocationsPage() {
                               <p
                                 key={slot.key}
                                 className="truncate"
-                                title={lectById[slotsOf[slot.key]].fullName}
+                                title={lectById[slotsOf[slot.key]]?.fullName}
                               >
                                 <span className="font-semibold text-textSecondary">
                                   {slot.short}·
                                 </span>{" "}
-                                {lectById[slotsOf[slot.key]].fullName}
+                                {lectById[slotsOf[slot.key]]?.fullName ?? (slotsOf[slot.key] ? "Lecturer unavailable" : "Unassigned")}
                               </p>
                             ))}
                           </div>
@@ -1150,6 +1030,22 @@ export default function AllocationsPage() {
           </div>
         </div>
       </div>
+
+      {autoAssignOpen && (
+        <AutoAssignDialog
+          academicYears={academicYearOptions}
+          programmes={programmeOptions}
+          initialAcademicYear={academicYear}
+          initialProgramme={programme}
+          onClose={() => setAutoAssignOpen(false)}
+          onSaved={(message) => {
+            setAutoAssignOpen(false);
+            setItemToast(message);
+            setReloadTick((tick) => tick + 1);
+            window.dispatchEvent(new Event("tw:rail:refresh"));
+          }}
+        />
+      )}
 
       {/* assign / edit dialog (CRUD to the database) */}
       {assigning && (

@@ -24,9 +24,13 @@
  * Diploma programmes (Master/Foundation are uncapped) — post-state
  * distinct-course counts are checked inside the same transaction, so a
  * retarget that keeps a lecturer within the cap still succeeds.
+ * Weekly hours in the selected coded academic year must also stay within
+ * the lecturer's stored max_limit_hours. Manual and automatic writers share
+ * a transaction-level database lock for capacity/duplicate protection.
  */
 import { Router, Request, Response } from "express";
 import { getPool } from "../db";
+import { checkTeachingHourLimits, handleAutoAssignment, lockAssignmentWrites } from "../services/auto-assignment-service";
 
 const router = Router();
 
@@ -100,6 +104,7 @@ const loadSubject = async (client: { query: Function }, code: string) => {
       FROM subjects s
       LEFT JOIN programmes p ON p.id = s.programme_id
      WHERE s.subject_code = $1
+     FOR SHARE OF s
     `,
     [code],
   );
@@ -239,6 +244,18 @@ router.get("/", async (_req: Request, res: Response) => {
   }
 });
 
+/* ── AUTO ASSIGN — preview first, then atomically save a reviewed batch ──── */
+
+router.post("/auto-assign", async (req: Request, res: Response) => {
+  try {
+    const result = await handleAutoAssignment(getPool(), req.body);
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error("POST /api/allocations/auto-assign failed:", error);
+    return res.status(500).json({ ok: false, message: "Auto assignment failed. No partial batch was saved." });
+  }
+});
+
 /* shared transaction body for POST (create) and PUT (:code replace) —
    code is looked up first; the slot-select phase is identical so the
    create route validates "not already assigned" before delegating here */
@@ -252,6 +269,7 @@ const writeSlots = async (
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await lockAssignmentWrites(client);
 
     /* subject must exist and carry an academic year + week count */
     const subject = await loadSubject(client, subjectCode);
@@ -319,6 +337,12 @@ const writeSlots = async (
     if (capError) {
       await client.query("ROLLBACK");
       return res.status(409).json({ ok: false, message: capError });
+    }
+
+    const hourError = await checkTeachingHourLimits(client, subject, slots);
+    if (hourError) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ ok: false, message: hourError });
     }
 
     /* rewrite the slot rows */
@@ -413,6 +437,7 @@ router.delete("/:subjectCode", async (req: Request, res: Response) => {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await lockAssignmentWrites(client);
     const subject = await loadSubject(client, req.params.subjectCode);
     if (!subject) {
       await client.query("ROLLBACK");

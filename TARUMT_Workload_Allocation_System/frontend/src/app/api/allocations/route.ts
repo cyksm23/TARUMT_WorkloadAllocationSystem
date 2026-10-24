@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Pool } from "pg";
+import { checkTeachingHourLimits, lockAssignmentWrites } from "@/lib/server/auto-assignment";
 
 /**
  * Same-origin fallback twin of backend-express routes/allocations.ts
@@ -7,7 +8,8 @@ import { Pool } from "pg";
  * per LECTURE/TUTORIAL/PRACTICAL under the slot lecturer's workloads
  * header for the subject's academic year); hour totals are resummed after
  * every write. Policy: 3 distinct Bachelor courses / 4 Diploma courses
- * per lecturer — checked on the post-state counts inside the transaction.
+ * per lecturer, plus the stored per-term maximum hours — checked inside
+ * the same serialized transaction as manual and automatic assignments.
  */
 
 export const runtime = "nodejs";
@@ -103,6 +105,7 @@ const loadSubject = async (
       FROM subjects s
       LEFT JOIN programmes p ON p.id = s.programme_id
      WHERE s.subject_code = $1
+     FOR SHARE OF s
     `,
     [code],
   );
@@ -266,6 +269,7 @@ export async function POST(request: Request) {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await lockAssignmentWrites(client);
 
     const subject = await loadSubject(client, subjectCode);
     if (!subject) {
@@ -326,6 +330,12 @@ export async function POST(request: Request) {
     if (capError) {
       await client.query("ROLLBACK");
       return NextResponse.json({ ok: false, message: capError }, { status: 409 });
+    }
+
+    const hourError = await checkTeachingHourLimits(client, subject, slots);
+    if (hourError) {
+      await client.query("ROLLBACK");
+      return NextResponse.json({ ok: false, message: hourError }, { status: 409 });
     }
 
     await client.query(

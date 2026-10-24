@@ -38,7 +38,6 @@ import {
 } from "react";
 import {
   ArrowDown,
-  ArrowDownUp,
   ArrowUp,
   BookOpen,
   Check,
@@ -56,6 +55,10 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { apiFetch } from "@/services/apiClient";
 import Toast from "@/components/toast/Toast";
+import CompactFilterSelect from "@/components/ui/FilterSelect";
+import { SortableGridHeader } from "@/components/ui/SortableTableHeader";
+import useTableSortAnimation from "@/components/ui/useTableSortAnimation";
+import { sortByCriteria, toggleSortCriterion, type SortCriterion } from "@/lib/multi-sort";
 
 /* ── data types ──────────────────────────────────────────────────────────── */
 
@@ -115,41 +118,49 @@ interface DepartmentOption {
 
 type Triage = "all" | "active" | "inactive";
 
-type CourseSortKey =
-  | "code_asc"
-  | "code_desc"
-  | "name_asc"
-  | "name_desc"
-  | "hours_desc"
-  | "students_desc";
-
-type ProgrammeSortKey =
-  | "code_asc"
-  | "code_desc"
-  | "name_asc"
-  | "name_desc"
-  | "courses_desc";
+type CourseSortKey = "course" | "hours" | "students" | "status";
+type ProgrammeSortKey = "programme" | "department" | "level" | "duration" | "courses" | "status";
 
 const LEVELS = ["Bachelor", "Master", "Diploma", "Foundation"] as const;
 
-const COURSE_SORTERS: Record<CourseSortKey, (a: CourseRow, b: CourseRow) => number> = {
-  code_asc: (a, b) => a.subjectCode.localeCompare(b.subjectCode),
-  code_desc: (a, b) => b.subjectCode.localeCompare(a.subjectCode),
-  name_asc: (a, b) => a.subjectName.localeCompare(b.subjectName),
-  name_desc: (a, b) => b.subjectName.localeCompare(a.subjectName),
-  hours_desc: (a, b) =>
-    b.totalHours - a.totalHours || a.subjectCode.localeCompare(b.subjectCode),
-  students_desc: (a, b) =>
-    b.studentCount - a.studentCount || a.subjectCode.localeCompare(b.subjectCode),
+const COURSE_SORT_LABELS: Record<CourseSortKey, string> = {
+  course: "Course",
+  hours: "Hours",
+  students: "Students",
+  status: "Status",
 };
 
+const PROGRAMME_SORT_LABELS: Record<ProgrammeSortKey, string> = {
+  programme: "Programme",
+  department: "Department",
+  level: "Level",
+  duration: "Duration",
+  courses: "Courses",
+  status: "Status",
+};
+
+const compareCourseIdentity = (a: CourseRow, b: CourseRow) =>
+  a.subjectCode.localeCompare(b.subjectCode, undefined, { numeric: true }) ||
+  a.subjectName.localeCompare(b.subjectName);
+
+const COURSE_SORTERS: Record<CourseSortKey, (a: CourseRow, b: CourseRow) => number> = {
+  course: compareCourseIdentity,
+  hours: (a, b) => a.totalHours - b.totalHours,
+  students: (a, b) => a.studentCount - b.studentCount,
+  status: (a, b) => Number(b.isActive) - Number(a.isActive),
+};
+
+const compareProgrammeIdentity = (a: ProgrammeRow, b: ProgrammeRow) =>
+  a.programmeCode.localeCompare(b.programmeCode, undefined, { numeric: true }) ||
+  a.programmeName.localeCompare(b.programmeName);
+
 const PROGRAMME_SORTERS: Record<ProgrammeSortKey, (a: ProgrammeRow, b: ProgrammeRow) => number> = {
-  code_asc: (a, b) => a.programmeCode.localeCompare(b.programmeCode),
-  code_desc: (a, b) => b.programmeCode.localeCompare(a.programmeCode),
-  name_asc: (a, b) => a.programmeName.localeCompare(b.programmeName),
-  name_desc: (a, b) => b.programmeName.localeCompare(a.programmeName),
-  courses_desc: (a, b) =>
-    b.subjectCount - a.subjectCount || a.programmeCode.localeCompare(b.programmeCode),
+  programme: compareProgrammeIdentity,
+  department: (a, b) => a.department.localeCompare(b.department),
+  level: (a, b) => (a.level ?? "").localeCompare(b.level ?? ""),
+  duration: (a, b) => (a.durationYears ?? 0) - (b.durationYears ?? 0),
+  courses: (a, b) => a.subjectCount - b.subjectCount,
+  status: (a, b) => Number(b.isActive) - Number(a.isActive),
 };
 
 /* ── shared table-grid templates — the header and EVERY row reuse the same
@@ -709,7 +720,7 @@ function useCourseValidation(
       errors.studentSum = sumWarnings.join("\n");
     }
     return errors;
-  }, [form, attempted, blurred]);
+  }, [form, attempted, blurred, countsOptional]);
 }
 
 function CourseHourCell({
@@ -2008,7 +2019,7 @@ function ClassSizeRulesSection({
           <h2 className="text-[15px] font-bold leading-[22px] text-text">Class-size rules</h2>
           <p className="mt-[2px] text-[12px] text-textSecondary">
             How many students a tutorial / practical class may hold — a class over its limit
-            splits into groups, and every course's Groups derive from these numbers. Numbers
+            splits into groups, and every course&apos;s Groups derive from these numbers. Numbers
             only, 1–200 students per class — flexible at any time.
           </p>
         </div>
@@ -2338,14 +2349,19 @@ export default function CoursesPage() {
   /* course filters */
   const [courseQuery, setCourseQuery] = useState("");
   const [courseProgramme, setCourseProgramme] = useState("all");
+  const [courseAcademicYear, setCourseAcademicYear] = useState("all");
   const [courseStatus, setCourseStatus] = useState<Triage>("all");
-  const [courseSort, setCourseSort] = useState<CourseSortKey>("code_asc");
+  const [courseSorts, setCourseSorts] = useState<SortCriterion<CourseSortKey>[]>([
+    { key: "course", direction: "asc" },
+  ]);
 
   /* programme filters */
   const [progQuery, setProgQuery] = useState("");
   const [progLevel, setProgLevel] = useState("all");
   const [progStatus, setProgStatus] = useState<Triage>("all");
-  const [progSort, setProgSort] = useState<ProgrammeSortKey>("code_asc");
+  const [progSorts, setProgSorts] = useState<SortCriterion<ProgrammeSortKey>[]>([
+    { key: "programme", direction: "asc" },
+  ]);
 
   /* dialogs */
   const [addCourseOpen, setAddCourseOpen] = useState(false);
@@ -2443,6 +2459,7 @@ export default function CoursesPage() {
       if (courseStatus === "active" && !c.isActive) return false;
       if (courseStatus === "inactive" && c.isActive) return false;
       if (courseProgramme !== "all" && c.programmeCode !== courseProgramme) return false;
+      if (courseAcademicYear !== "all" && String(c.academicYearId) !== courseAcademicYear) return false;
       if (!q) return true;
       return (
         c.subjectName.toLowerCase().includes(q) ||
@@ -2450,7 +2467,7 @@ export default function CoursesPage() {
         (c.programmeName ?? "").toLowerCase().includes(q)
       );
     });
-  }, [courses, courseQuery, courseProgramme, courseStatus]);
+  }, [courses, courseAcademicYear, courseQuery, courseProgramme, courseStatus]);
 
   const matchedProgrammes = useMemo(() => {
     const q = progQuery.trim().toLowerCase();
@@ -2468,13 +2485,45 @@ export default function CoursesPage() {
   }, [programmes, progQuery, progLevel, progStatus]);
 
   const sortedCourses = useMemo(
-    () => [...matchedCourses].sort(COURSE_SORTERS[courseSort]),
-    [matchedCourses, courseSort],
+    () => sortByCriteria(matchedCourses, courseSorts, COURSE_SORTERS, compareCourseIdentity),
+    [matchedCourses, courseSorts],
   );
   const sortedProgrammes = useMemo(
-    () => [...matchedProgrammes].sort(PROGRAMME_SORTERS[progSort]),
-    [matchedProgrammes, progSort],
+    () => sortByCriteria(matchedProgrammes, progSorts, PROGRAMME_SORTERS, compareProgrammeIdentity),
+    [matchedProgrammes, progSorts],
   );
+
+  const { bodyRef: courseBodyRef, prepareAnimation: prepareCourseSortAnimation } =
+    useTableSortAnimation<HTMLDivElement>(sortedCourses);
+  const { bodyRef: programmeBodyRef, prepareAnimation: prepareProgrammeSortAnimation } =
+    useTableSortAnimation<HTMLDivElement>(sortedProgrammes);
+
+  const toggleCourseSort = (key: CourseSortKey) => {
+    prepareCourseSortAnimation();
+    setCourseSorts((current) => toggleSortCriterion(current, key));
+  };
+  const toggleProgrammeSort = (key: ProgrammeSortKey) => {
+    prepareProgrammeSortAnimation();
+    setProgSorts((current) => toggleSortCriterion(current, key));
+  };
+  const courseSortDirection = (key: CourseSortKey) =>
+    courseSorts.find((criterion) => criterion.key === key)?.direction ?? null;
+  const courseSortPriority = (key: CourseSortKey) => {
+    const index = courseSorts.findIndex((criterion) => criterion.key === key);
+    return index < 0 ? undefined : index + 1;
+  };
+  const programmeSortDirection = (key: ProgrammeSortKey) =>
+    progSorts.find((criterion) => criterion.key === key)?.direction ?? null;
+  const programmeSortPriority = (key: ProgrammeSortKey) => {
+    const index = progSorts.findIndex((criterion) => criterion.key === key);
+    return index < 0 ? undefined : index + 1;
+  };
+  const courseSortSummary = courseSorts.length
+    ? `Sorting priority: ${courseSorts.map((criterion, index) => `${index + 1}. ${COURSE_SORT_LABELS[criterion.key]} ${criterion.direction === "asc" ? "ascending" : "descending"}`).join("; ")}. Later columns break ties.`
+    : "No course sorting applied. The original directory order is shown.";
+  const programmeSortSummary = progSorts.length
+    ? `Sorting priority: ${progSorts.map((criterion, index) => `${index + 1}. ${PROGRAMME_SORT_LABELS[criterion.key]} ${criterion.direction === "asc" ? "ascending" : "descending"}`).join("; ")}. Later columns break ties.`
+    : "No programme sorting applied. The original directory order is shown.";
 
   const courseCounts = useMemo(
     () => ({
@@ -2506,11 +2555,12 @@ export default function CoursesPage() {
     return map;
   }, [courses]);
 
-  /* remount key — every filter/sort/search change (and each save) replays the row glide-in */
+  /* Filter/search/save changes replay row entry. Sort changes deliberately do
+     not remount rows, allowing the FLIP transition to move them in place. */
   const listSignature =
     view === "courses"
-      ? `${view}|${courseStatus}|${courseProgramme}|${courseSort}|${courseQuery}|${reloadTick}`
-      : `${view}|${progStatus}|${progLevel}|${progSort}|${progQuery}|${reloadTick}`;
+      ? `${view}|${courseStatus}|${courseProgramme}|${courseAcademicYear}|${courseQuery}|${reloadTick}`
+      : `${view}|${progStatus}|${progLevel}|${progQuery}|${reloadTick}`;
 
   /** shared save handler — closes nothing itself; dialogs close via onSaved */
   const afterSave = (toast: string, reset: () => void) => {
@@ -2593,7 +2643,7 @@ export default function CoursesPage() {
             onClick={() => setCourseStatus("inactive")}
           />
           <div className="animate-[rowIn_0.26s_ease-out_0.18s_both] relative z-20 ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
-            <FilterSelect
+            <CompactFilterSelect
               ariaLabel="Filter by programme"
               value={courseProgramme}
               onChange={setCourseProgramme}
@@ -2604,32 +2654,44 @@ export default function CoursesPage() {
                   {p.code} · {p.name}
                 </option>
               ))}
-            </FilterSelect>
-            <FilterSelect
-              ariaLabel="Sort courses"
-              value={courseSort}
-              onChange={(v) => setCourseSort(v as CourseSortKey)}
-              icon={ArrowDownUp}
+            </CompactFilterSelect>
+            <CompactFilterSelect
+              ariaLabel="Filter courses by academic year term"
+              value={courseAcademicYear}
+              onChange={setCourseAcademicYear}
+              menuWidth={260}
             >
-              <option value="code_asc">Sort: Code A → Z</option>
-              <option value="code_desc">Sort: Code Z → A</option>
-              <option value="name_asc">Sort: Name A → Z</option>
-              <option value="name_desc">Sort: Name Z → A</option>
-              <option value="hours_desc">Sort: Total hours → high</option>
-              <option value="students_desc">Sort: Students → many</option>
-            </FilterSelect>
-            <div className="relative w-full sm:w-[260px]">
-              <Search
-                size={16}
-                className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
-              />
-              <input
-                type="text"
-                value={courseQuery}
-                onChange={(e) => setCourseQuery(e.target.value)}
-                placeholder="Search code, name, programme…"
-                className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
-              />
+              <option value="all">All academic years</option>
+              {Array.from(new Set(academicYears.map((term) => term.yearCode))).map((yearCode) => (
+                <optgroup key={yearCode} label={`AY ${yearCode}`}>
+                  {academicYears
+                    .filter((term) => term.yearCode === yearCode)
+                    .map((term) => (
+                      <option key={term.id} value={String(term.id)}>{term.label}</option>
+                    ))}
+                </optgroup>
+              ))}
+            </CompactFilterSelect>
+            <div className="flex w-full min-w-0 items-center gap-sm sm:w-auto">
+              <button type="button"
+                onClick={() => { prepareCourseSortAnimation(); setCourseSorts([]); }}
+                disabled={courseSorts.length === 0}
+                className="flex h-9 items-center gap-xs whitespace-nowrap rounded-badge px-md text-[12.5px] transition-colors border border-divider bg-surface font-medium text-textNormal hover:bg-hoverBg">
+                Clear Sort
+              </button>
+              <div className="relative min-w-0 flex-1 sm:w-[260px] sm:flex-none">
+                <Search
+                  size={16}
+                  className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
+                />
+                <input
+                  type="text"
+                  value={courseQuery}
+                  onChange={(e) => setCourseQuery(e.target.value)}
+                  placeholder="Search code, name, programme…"
+                  className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -2665,34 +2727,37 @@ export default function CoursesPage() {
                 </option>
               ))}
             </FilterSelect>
-            <FilterSelect
-              ariaLabel="Sort programmes"
-              value={progSort}
-              onChange={(v) => setProgSort(v as ProgrammeSortKey)}
-              icon={ArrowDownUp}
-            >
-              <option value="code_asc">Sort: Code A → Z</option>
-              <option value="code_desc">Sort: Code Z → A</option>
-              <option value="name_asc">Sort: Name A → Z</option>
-              <option value="name_desc">Sort: Name Z → A</option>
-              <option value="courses_desc">Sort: Courses → most</option>
-            </FilterSelect>
-            <div className="relative w-full sm:w-[260px]">
-              <Search
-                size={16}
-                className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
-              />
-              <input
-                type="text"
-                value={progQuery}
-                onChange={(e) => setProgQuery(e.target.value)}
-                placeholder="Search code, name, department…"
-                className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
-              />
+            <div className="flex w-full min-w-0 items-center gap-sm sm:w-auto">
+              <button type="button"
+                onClick={() => { prepareProgrammeSortAnimation(); setProgSorts([]); }}
+                disabled={progSorts.length === 0}
+                className="flex h-9 items-center gap-xs whitespace-nowrap rounded-badge px-md text-[12.5px] transition-colors border border-divider bg-surface font-medium text-textNormal hover:bg-hoverBg">
+                Clear Sort
+              </button>
+              <div className="relative min-w-0 flex-1 sm:w-[260px] sm:flex-none">
+                <Search
+                  size={16}
+                  className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
+                />
+                <input
+                  type="text"
+                  value={progQuery}
+                  onChange={(e) => setProgQuery(e.target.value)}
+                  placeholder="Search code, name, department…"
+                  className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
+                />
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      <p id="catalogue-sort-help" className="sr-only">
+        Use the Academic Year term list to filter courses. Click sortable column headers to combine sorts; later columns break ties. Use Clear Sort to start again.
+      </p>
+      <p id="catalogue-sort-summary" className="sr-only" aria-live="polite" aria-atomic="true">
+        {view === "courses" ? courseSortSummary : programmeSortSummary}
+      </p>
 
       {/* roster list */}
       <div className="mt-md overflow-hidden rounded-card bg-surface shadow-card">
@@ -2704,31 +2769,30 @@ export default function CoursesPage() {
             <div className="overflow-x-auto">
               <div className="min-w-[1080px]">
                 {/* header — identical grid template as the rows below */}
-                <div className={`${COURSE_GRID} border-b border-divider px-lg py-sm`}>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Course
-                  </p>
+                <div className={`${COURSE_GRID} border-b border-divider bg-surface px-lg py-sm`}>
+                  <SortableGridHeader label="Course" direction={courseSortDirection("course")}
+                    priority={courseSortPriority("course")} onSort={() => toggleCourseSort("course")}
+                    description="Sort by course code, then course name" />
                   <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                     Programme
                   </p>
                   <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                     Academic Year
                   </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Hours (L · T · P)
-                  </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Students
-                  </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Status
-                  </p>
+                  <SortableGridHeader label="Hours (L · T · P)" direction={courseSortDirection("hours")}
+                    priority={courseSortPriority("hours")} onSort={() => toggleCourseSort("hours")}
+                    description="Sort by total credit hours" />
+                  <SortableGridHeader label="Students" direction={courseSortDirection("students")}
+                    priority={courseSortPriority("students")} onSort={() => toggleCourseSort("students")} />
+                  <SortableGridHeader label="Status" direction={courseSortDirection("status")}
+                    priority={courseSortPriority("status")} onSort={() => toggleCourseSort("status")}
+                    description="Ascending places active courses first" />
                   <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                     Actions
                   </p>
                 </div>
 
-                <div key={listSignature}>
+                <div ref={courseBodyRef} key={listSignature}>
                   {courses.length === 0 && !error ? (
                     <div className="animate-[rowIn_0.26s_ease-out_both] flex items-center gap-sm px-lg py-xl">
                       <BookOpen size={18} className="shrink-0 text-textSecondary" />
@@ -2745,6 +2809,7 @@ export default function CoursesPage() {
                     sortedCourses.map((c, i) => (
                       <div
                         key={c.subjectCode}
+                        data-sort-motion={`course:${c.subjectCode}`}
                         style={{ animationDelay: `${Math.min(i * 22, 440)}ms` }}
                         className={`${COURSE_GRID} animate-[rowIn_0.26s_ease-out_both] border-b border-divider px-lg py-md transition-colors last:border-b-0 hover:bg-hoverBg/60`}
                       >
@@ -2832,31 +2897,28 @@ export default function CoursesPage() {
             <div className="overflow-x-auto">
               <div className="min-w-[960px]">
                 {/* header — identical grid template as the rows below */}
-                <div className={`${PROGRAMME_GRID} border-b border-divider px-lg py-sm`}>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Programme
-                  </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Department
-                  </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Level
-                  </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Duration
-                  </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Courses
-                  </p>
-                  <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-                    Status
-                  </p>
+                <div className={`${PROGRAMME_GRID} border-b border-divider bg-surface px-lg py-sm`}>
+                  <SortableGridHeader label="Programme" direction={programmeSortDirection("programme")}
+                    priority={programmeSortPriority("programme")} onSort={() => toggleProgrammeSort("programme")}
+                    description="Sort by programme code, then programme name" />
+                  <SortableGridHeader label="Department" direction={programmeSortDirection("department")}
+                    priority={programmeSortPriority("department")} onSort={() => toggleProgrammeSort("department")} />
+                  <SortableGridHeader label="Level" direction={programmeSortDirection("level")}
+                    priority={programmeSortPriority("level")} onSort={() => toggleProgrammeSort("level")} />
+                  <SortableGridHeader label="Duration" direction={programmeSortDirection("duration")}
+                    priority={programmeSortPriority("duration")} onSort={() => toggleProgrammeSort("duration")} />
+                  <SortableGridHeader label="Courses" direction={programmeSortDirection("courses")}
+                    priority={programmeSortPriority("courses")} onSort={() => toggleProgrammeSort("courses")}
+                    description="Sort by number of courses" />
+                  <SortableGridHeader label="Status" direction={programmeSortDirection("status")}
+                    priority={programmeSortPriority("status")} onSort={() => toggleProgrammeSort("status")}
+                    description="Ascending places active programmes first" />
                   <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                     Actions
                   </p>
                 </div>
 
-                <div key={listSignature}>
+                <div ref={programmeBodyRef} key={listSignature}>
                   {programmes.length === 0 && !error ? (
                     <div className="animate-[rowIn_0.26s_ease-out_both] flex items-center gap-sm px-lg py-xl">
                       <GraduationCap size={18} className="shrink-0 text-textSecondary" />
@@ -2875,6 +2937,7 @@ export default function CoursesPage() {
                     sortedProgrammes.map((p, i) => (
                       <div
                         key={p.programmeCode}
+                        data-sort-motion={`programme:${p.programmeCode}`}
                         style={{ animationDelay: `${Math.min(i * 22, 440)}ms` }}
                         className={`${PROGRAMME_GRID} animate-[rowIn_0.26s_ease-out_both] border-b border-divider px-lg py-md transition-colors last:border-b-0 hover:bg-hoverBg/60`}
                       >

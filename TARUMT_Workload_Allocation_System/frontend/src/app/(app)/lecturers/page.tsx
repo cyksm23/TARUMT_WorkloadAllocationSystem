@@ -5,11 +5,11 @@
  *
  * Displays every lecturer from PostgreSQL (GET /api/lecturers): staff ID,
  * name, position, contact, employment classification, department, linked
- * account and a live academic-year workload roll-up. Hour limits are derived —
- * NOT stored per lecturer — by resolving the editable workload_rules table
- * against each lecturer's role (Programme Leader wins) and the programme
- * levels actually taught (Bachelor only / Diploma only / both). The
- * hour-limit rules card below the roster edits those min/max pairs live.
+ * account and a live academic-year workload roll-up. Hour limits are stored
+ * per lecturer; rules provide suggestions based on role (Programme Leader
+ * wins) and the programme levels taught (Bachelor / Diploma / both). Editing
+ * the rules alone never changes saved lecturer limits. The explicit all-staff
+ * action previews and confirms a reset to each applicable rule.
  *
  * Doc basis: RBAC gives PLs read access to workload data for all staff in
  * their department. Each row carries an Edit action (UC_CPM_01 "maintain
@@ -19,14 +19,20 @@
  */
 
 import { Children, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowDownUp, ArrowUp, Check, ChevronDown, Loader2, Pencil, Plus, RefreshCcw, Save, Search, Trash2, TriangleAlert, Users, X, type LucideIcon } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, Clock3, Loader2, Pencil, Plus, RefreshCcw, Save, Search, Trash2, TriangleAlert, Users, X, type LucideIcon } from "lucide-react";
 import { apiFetch } from "@/services/apiClient";
 import Toast from "@/components/toast/Toast";
+import ApplyHourLimitRulesDialog from "@/components/lecturers/ApplyHourLimitRulesDialog";
+import SortableTableHeader from "@/components/ui/SortableTableHeader";
+import useTableSortAnimation from "@/components/ui/useTableSortAnimation";
+import { LECTURER_SORT_LABELS, sortLecturers, toggleLecturerSort, type LecturerSort, type LecturerSortKey } from "@/lib/lecturer-sorting";
 
 interface LecturerRow {
   id: number;
   staffId: string;
   fullName: string;
+  specialization: string | null;
+  areaOfInterest: string | null;
   email: string | null;
   phone: string | null;
   position: string | null;
@@ -72,30 +78,6 @@ interface WorkloadRule {
 }
 
 type TypeFilter = "all" | "FULL_TIME" | "PART_TIME" | "PL";
-
-type SortKey =
-  | "staff_asc"
-  | "staff_desc"
-  | "name_asc"
-  | "name_desc"
-  | "class_name"
-  | "hours_desc";
-
-/** comparators for every sort mode */
-const SORTERS: Record<SortKey, (a: LecturerRow, b: LecturerRow) => number> = {
-  staff_asc: (a, b) => a.staffId.localeCompare(b.staffId),
-  staff_desc: (a, b) => b.staffId.localeCompare(a.staffId),
-  name_asc: (a, b) => a.fullName.localeCompare(b.fullName),
-  name_desc: (a, b) => b.fullName.localeCompare(a.fullName),
-  /* Programme Leaders first, then full-time, then part-time; names inside */
-  class_name: (a, b) => {
-    const rank = (l: LecturerRow) =>
-      l.isPl ? 0 : l.employmentType === "FULL_TIME" ? 1 : 2;
-    return rank(a) - rank(b) || a.fullName.localeCompare(b.fullName);
-  },
-  hours_desc: (a, b) =>
-    b.maxHours - a.maxHours || b.minHours - a.minHours || a.staffId.localeCompare(b.staffId),
-};
 
 const EMPLOYMENT_LABEL: Record<LecturerRow["employmentType"], string> = {
   FULL_TIME: "Full-time",
@@ -551,7 +533,7 @@ function WorkloadCell({
       type="button"
       onClick={() => onExceedToast(exceedMessage)}
       onMouseEnter={() => onExceedToast(exceedMessage)}
-      title={exceedMessage}
+      onFocus={() => onExceedToast(exceedMessage)}
       aria-label={`Warning: ${exceedMessage}`}
       className="animate-[badgeIn_0.2s_ease-out_both] flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-badge bg-errorBg text-errorText transition-colors hover:bg-error/15"
     >
@@ -609,7 +591,7 @@ function CustomLimitChip() {
 
 function StatusDot({ lecturer }: { lecturer: LecturerRow }) {
   return (
-    <div className="flex w-[84px] items-center gap-xs">
+    <div className="flex w-[68px] shrink-0 items-center gap-xs">
       <span
         className={`h-2 w-2 shrink-0 rounded-badge ${
           lecturer.isActive ? "bg-success" : "bg-textDisabled"
@@ -702,6 +684,7 @@ function EditLecturerDialog({
   onSaved: () => void;
 }) {
   const [fullName, setFullName] = useState(lecturer.fullName);
+  const [specialization, setSpecialization] = useState(lecturer.specialization ?? "");
   const [email, setEmail] = useState(lecturer.email ?? "");
   const [phone, setPhone] = useState(lecturer.phone ?? "");
   /* position is chosen via the same selection list as Add Staff; when the
@@ -809,6 +792,7 @@ function EditLecturerDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fullName: fullName.trim(),
+          specialization: specialization.trim(),
           email: email.trim(),
           phone: phone.trim(),
           position: finalPosition,
@@ -940,6 +924,19 @@ function EditLecturerDialog({
                 </p>
               )}
             </div>
+          </Field>
+          <Field label="Specialization" wide>
+            <input
+              type="text"
+              value={specialization}
+              onChange={(e) => setSpecialization(e.target.value)}
+              maxLength={200}
+              placeholder="e.g. Computer Science, Mathematics or Software Engineering"
+              className={INPUT_CLS}
+            />
+            <p className="mt-1 text-[11.5px] leading-snug text-textSecondary">
+              Optional — used with interests and teaching hours for Auto Assign.
+            </p>
           </Field>
           <Field label="Position" wide>
             <div className="flex flex-col gap-sm">
@@ -1195,6 +1192,7 @@ function AddStaffDialog({
 }) {
   const [staffId, setStaffId] = useState("");
   const [fullName, setFullName] = useState("");
+  const [specialization, setSpecialization] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [positionChoice, setPositionChoice] = useState<string>("Lecturer");
@@ -1298,6 +1296,7 @@ function AddStaffDialog({
         body: JSON.stringify({
           staffId: code,
           fullName: fullName.trim(),
+          specialization: specialization.trim(),
           email: email.trim(),
           phone: phone.trim(),
           position,
@@ -1443,6 +1442,20 @@ function AddStaffDialog({
                 </p>
               )}
             </div>
+          </Field>
+
+          <Field label="Specialization" wide>
+            <input
+              type="text"
+              value={specialization}
+              onChange={(e) => setSpecialization(e.target.value)}
+              maxLength={200}
+              placeholder="e.g. Computer Science, Mathematics or Software Engineering"
+              className={INPUT_CLS}
+            />
+            <p className="mt-1 text-[11.5px] leading-snug text-textSecondary">
+              Optional — used with interests and teaching hours for Auto Assign.
+            </p>
           </Field>
 
           {/* position — selection only, with an editable "Other" option */}
@@ -1774,15 +1787,15 @@ export default function LecturersPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [departmentFilter, setDepartmentFilter] = useState<string>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("staff_asc");
+  const [sorts, setSorts] = useState<LecturerSort[]>([{ key: "name", direction: "asc" }]);
   /** lecturer currently opened in the edit dialog (null = closed) */
   const [editing, setEditing] = useState<LecturerRow | null>(null);
-  /** bumped after each successful save — refetches + replays the row glide-in */
+  /** bumped after each successful save — refetches the directory */
   const [reloadTick, setReloadTick] = useState(0);
   /** Add Staff dialog open state (UC_CPM_01 — programme leader creates records) */
   const [addOpen, setAddOpen] = useState(false);
+  const [applyRulesOpen, setApplyRulesOpen] = useState(false);
   /** staff row queued for deletion — shows the confirm guard */
   const [deleting, setDeleting] = useState<LecturerRow | null>(null);
   /** ⚠ filter: show only lecturers whose saved limit broke the rule bounds */
@@ -1791,7 +1804,7 @@ export default function LecturersPage() {
   const [rules, setRules] = useState<WorkloadRule[]>([]);
   /** toast for limit-exceeded warnings raised by the edit dialog */
   const [limitToast, setLimitToast] = useState<string | null>(null);
-  /** green completion toast (top-center) — fired after a successful delete */
+  /** green completion toast (top-center) — staff actions and bulk limit reset */
   const [staffToast, setStaffToast] = useState<string | null>(null);
 
   /** floating anchor button: roster ⇄ Hour-limit rules card. Fixed to the
@@ -1857,7 +1870,7 @@ export default function LecturersPage() {
       );
   }, [reloadTick]);
 
-  /* live filter: classification chip + status + department + free-text search
+  /* live filter: classification chip + department + free-text search
      (+ the ⚠ warnings-only toggle) */
   const matched = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1873,14 +1886,6 @@ export default function LecturersPage() {
             : l.employmentType === typeFilter;
       if (!typeOk) return false;
 
-      const statusOk =
-        statusFilter === "all"
-          ? true
-          : statusFilter === "active"
-            ? l.isActive
-            : !l.isActive;
-      if (!statusOk) return false;
-
       if (departmentFilter !== "all" && l.departmentCode !== departmentFilter) return false;
 
       if (!q) return true;
@@ -1891,10 +1896,24 @@ export default function LecturersPage() {
         (l.position ?? "").toLowerCase().includes(q)
       );
     });
-  }, [lecturers, query, typeFilter, statusFilter, departmentFilter, warningsOnly]);
+  }, [lecturers, query, typeFilter, departmentFilter, warningsOnly]);
 
-  /* sorted view for the selected mode */
-  const sorted = useMemo(() => [...matched].sort(SORTERS[sortKey]), [matched, sortKey]);
+  const sorted = useMemo(() => sortLecturers(matched, sorts), [matched, sorts]);
+  const { bodyRef, prepareAnimation } = useTableSortAnimation(sorted);
+
+  const toggleSort = (key: LecturerSortKey) => {
+    prepareAnimation();
+    setSorts((current) => toggleLecturerSort(current, key));
+  };
+
+  const sortDirection = (key: LecturerSortKey) => sorts.find((criterion) => criterion.key === key)?.direction ?? null;
+  const sortPriority = (key: LecturerSortKey) => {
+    const index = sorts.findIndex((criterion) => criterion.key === key);
+    return index < 0 ? undefined : index + 1;
+  };
+  const sortSummary = sorts.length > 0
+    ? `Sorting priority: ${sorts.map((criterion, index) => `${index + 1}. ${LECTURER_SORT_LABELS[criterion.key]} ${criterion.direction === "asc" ? "ascending" : "descending"}`).join("; ")}. Later columns break ties.`
+    : "No sorting applied. The directory's original order is shown.";
 
   /* unique departments in the roster — the dropdown appears only with >1 */
   const departments = useMemo(() => {
@@ -1954,10 +1973,6 @@ export default function LecturersPage() {
     return pieces.join(" · ");
   }, [rules]);
 
-  /* remount key — every search / sort / filter change (and each edit save)
-     replays the row glide-in */
-  const listSignature = `${typeFilter}|${statusFilter}|${departmentFilter}|${sortKey}|${query}|${warningsOnly ? "warned" : "all"}|${reloadTick}`;
-
   /* starter pair for newly created staff — the DEFAULT rule's suggestion
      (no courses assigned yet at creation time), editable in the dialog */
   const defaultRule =
@@ -1975,18 +1990,27 @@ export default function LecturersPage() {
             Staff directory &amp; classifications · {department ?? "loading department…"}
           </p>
         </div>
-        {/* add staff — pinned at the far right of the heading row */}
-        {defaultRule && (
+        <div className="flex w-full min-w-0 items-center gap-sm sm:w-auto">
           <button
             type="button"
-            onClick={() => setAddOpen(true)}
-            title="Add a staff member"
-            className="flex h-11 items-center gap-xs rounded-button bg-primary px-md text-[13px] font-medium text-white shadow-card transition-all hover:bg-primaryHover active:scale-95"
+            onClick={() => { setLimitToast(null); setApplyRulesOpen(true); }}
+            className="flex min-h-11 min-w-0 flex-1 items-center justify-center gap-xs rounded-button bg-primary px-md py-sm text-[13px] font-medium leading-snug text-white shadow-card transition-all hover:bg-primaryHover active:scale-95 sm:flex-none"
           >
-            <Plus size={16} />
-            Add Staff
+            <Clock3 size={17} className="shrink-0" />
+            <span>Apply Hour-limit Rules</span>
           </button>
-        )}
+          {defaultRule && (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              title="Add a staff member"
+              className="flex h-11 shrink-0 items-center gap-xs rounded-button bg-primary px-md text-[13px] font-medium text-white shadow-card transition-all hover:bg-primaryHover active:scale-95"
+            >
+              <Plus size={16} />
+              Add Staff
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -2042,7 +2066,7 @@ export default function LecturersPage() {
           tone="error"
           onClick={() => setWarningsOnly((v) => !v)}
         />
-        {/* right group: department (auto-appears with >1 dept) + status + sort + search */}
+        {/* department (when applicable) and search; sorting lives in the table headers */}
         <div className="ml-auto flex w-full flex-wrap items-center gap-sm sm:w-auto">
           {departments.length > 1 && (
             <FilterSelect
@@ -2058,180 +2082,129 @@ export default function LecturersPage() {
               ))}
             </FilterSelect>
           )}
-          <FilterSelect
-            ariaLabel="Filter by status"
-            value={statusFilter}
-            onChange={(v) => setStatusFilter(v as "all" | "active" | "inactive")}
-          >
-            <option value="all">Status: All</option>
-            <option value="active">Status: Active</option>
-            <option value="inactive">Status: Inactive</option>
-          </FilterSelect>
-          <FilterSelect
-            ariaLabel="Sort staff"
-            value={sortKey}
-            onChange={(v) => setSortKey(v as SortKey)}
-            icon={ArrowDownUp}
-          >
-            <option value="staff_asc">Sort: Staff ID ↑</option>
-            <option value="staff_desc">Sort: Staff ID ↓</option>
-            <option value="name_asc">Sort: Name A → Z</option>
-            <option value="name_desc">Sort: Name Z → A</option>
-            <option value="class_name">Sort: Classification, then name</option>
-            <option value="hours_desc">Sort: Hour rule → low</option>
-          </FilterSelect>
-          <div className="relative w-full sm:w-[260px]">
-            <Search
-              size={16}
-              className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
-            />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search name, staff ID, email…"
-              className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
-            />
+          <div className="flex w-full min-w-0 items-center gap-sm sm:w-auto">
+            <button type="button" onClick={() => { prepareAnimation(); setSorts([]); }} disabled={sorts.length === 0}
+              className="flex h-9 items-center gap-xs whitespace-nowrap rounded-badge px-md text-[12.5px] transition-colors border border-divider bg-surface font-medium text-textNormal hover:bg-hoverBg">
+              Clear Sort
+            </button>
+            <div className="relative min-w-0 flex-1 sm:w-[260px] sm:flex-none">
+              <Search
+                size={16}
+                className="pointer-events-none absolute left-md top-1/2 -translate-y-1/2 text-textSecondary"
+              />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search name, staff ID, email…"
+                className="h-11 w-full rounded-button border border-divider bg-surface pl-10 pr-md text-[13.5px] text-text outline-none transition-colors placeholder:text-textPlaceholder focus:border-primary focus:ring-4 focus:ring-primaryLight"
+              />
+            </div>
           </div>
         </div>
       </div>
 
-      {/* roster list (Gmail-style rows, one white card) */}
-      <div className="mt-md overflow-hidden rounded-card bg-surface shadow-card">
-        {/* column headings */}
-        <div className="hidden items-center gap-md border-b border-divider px-lg py-sm md:flex">
-          <p className="min-w-[220px] flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-            Lecturer
-          </p>
-          <p className="hidden w-[92px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary md:block">
-            Staff ID
-          </p>
-          <p className="hidden min-w-0 flex-[1.1] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary lg:block">
-            Contact
-          </p>
-          <p className="hidden w-[168px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary md:block">
-            Classification
-          </p>
-          <p className="hidden w-[168px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary sm:block">
-            Workload limit
-          </p>
-          <p className="w-[84px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-            Status
-          </p>
-          <p className="w-[88px] text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
-            Actions
-          </p>
-        </div>
+      <p id="lecturer-sort-help" className="sr-only">Click headers to combine sorts in click order; later columns break ties. Use Clear Sort to start again.</p>
+      <p id="lecturer-sort-summary" className="sr-only" aria-live="polite" aria-atomic="true">{sortSummary}</p>
 
-        {/* keyed by filter+sort+search signature — every change replays the row glide-in */}
-        <div key={listSignature}>
-          {lecturers.length === 0 && !error ? (
-            <div
-              style={{ animationDelay: "0ms" }}
-              className="animate-[rowIn_0.26s_ease-out_both] flex items-center gap-sm px-lg py-xl"
-            >
-              <Users size={18} className="shrink-0 text-textSecondary" />
-              <p className="text-[13px] text-textSecondary">
-                Loading lecturers from PostgreSQL…
-              </p>
-            </div>
-          ) : sorted.length === 0 ? (
-            <div
-              style={{ animationDelay: "0ms" }}
-              className="animate-[rowIn_0.26s_ease-out_both] px-lg py-xl text-center"
-            >
-              <p className="text-[14px] font-medium text-textNormal">No lecturer found</p>
-              <p className="mt-1 text-[12.5px] text-textSecondary">
-                No staff member matches “{query.trim()}” with the selected filters.
-              </p>
-            </div>
-          ) : (
-            sorted.map((l, i) => (
-              <div
-                key={l.id}
-                style={{ animationDelay: `${Math.min(i * 22, 440)}ms` }}
-                className="animate-[rowIn_0.26s_ease-out_both] flex flex-wrap items-center gap-x-md gap-y-sm border-b border-divider px-lg py-md transition-colors last:border-b-0 hover:bg-hoverBg/60"
-              >
-              {/* identity: name + position */}
-              <div className="flex min-w-[220px] flex-1 items-center gap-sm">
-                <div className="min-w-0">
-                  <p className="text-[14px] font-semibold text-text">{l.fullName}</p>
-                  <p className="mt-[2px] whitespace-nowrap text-[12px] text-textSecondary">
-                    {l.position ?? "Lecturer"}
-                    {l.academicYearRecords > 0
-                      ? ` · ${l.academicYearRecords} academic-year record${l.academicYearRecords > 1 ? "s" : ""}`
-                      : ""}
-                  </p>
+      {/* The headers stay available on every screen; narrow screens scroll
+          this table horizontally instead of hiding its sorting controls. */}
+      <div className="mt-md overflow-x-auto rounded-card bg-surface shadow-card">
+        <table aria-label="Lecturer directory" aria-describedby="lecturer-sort-help lecturer-sort-summary" className="w-full min-w-[1080px] table-fixed border-collapse text-left">
+          <caption className="sr-only">Combine Lecturer, Staff ID, Workload limit and Status in sorting priority order. Down arrow means ascending; up arrow means descending.</caption>
+          <colgroup>
+            <col className="w-[22%]" />
+            <col className="w-[112px]" />
+            <col />
+            <col className="w-[144px]" />
+            <col className="w-[184px]" />
+            <col className="w-[108px]" />
+            <col className="w-[104px]" />
+          </colgroup>
+          <thead className="bg-surface">
+            <tr className="border-b border-divider">
+              <SortableTableHeader label="Lecturer" direction={sortDirection("name")} priority={sortPriority("name")}
+                onSort={() => toggleSort("name")} className="pl-lg" />
+              <SortableTableHeader label="Staff ID" direction={sortDirection("staffId")} priority={sortPriority("staffId")}
+                onSort={() => toggleSort("staffId")} />
+              <th scope="col" className="px-sm py-sm text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">Specialization &amp; Area of Interest</th>
+              <th scope="col" className="px-sm py-sm text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">Classification</th>
+              <SortableTableHeader label="Workload limit" direction={sortDirection("workloadLimit")} priority={sortPriority("workloadLimit")}
+                onSort={() => toggleSort("workloadLimit")} description="Maximum workload-limit hours, then minimum hours" />
+              <SortableTableHeader label="Status" direction={sortDirection("status")} priority={sortPriority("status")}
+                onSort={() => toggleSort("status")} description="Ascending: Active first. Descending: Inactive first" />
+              <th scope="col" className="py-sm pl-sm pr-lg text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">Actions</th>
+            </tr>
+          </thead>
+          <tbody ref={bodyRef}>
+            {lecturers.length === 0 && !error ? (
+              <tr><td colSpan={7} className="px-lg py-xl">
+                <div className="flex items-center gap-sm text-[13px] text-textSecondary">
+                  <Users size={18} className="shrink-0" /> Loading lecturers from PostgreSQL…
                 </div>
-              </div>
-
-              {/* staff ID */}
-              <span className="hidden w-[92px] shrink-0 md:block">
-                <span className="rounded-badge bg-background px-sm py-1 text-[12px] font-medium tracking-[0.04em] text-textNormal">
-                  {l.staffId}
-                </span>
-              </span>
-
-              {/* contact */}
-              <div className="hidden min-w-0 flex-[1.1] lg:block">
-                <p className="truncate text-[12.5px] text-textSecondary">{l.email ?? "—"}</p>
-                {l.phone && (
-                  <p className="truncate text-[11.5px] text-textSecondary">{l.phone}</p>
-                )}
-              </div>
-
-              {/* classification badges */}
-              <div className="hidden w-[168px] shrink-0 flex-wrap gap-xs md:flex">
-                {l.isPl && (
-                  <span className="rounded-badge bg-primaryLight px-sm py-[3px] text-[11.5px] font-semibold text-primary">
-                    Programme Leader
-                  </span>
-                )}
-                <span
-                  className={`rounded-badge px-sm py-[3px] text-[11.5px] font-semibold ${EMPLOYMENT_CLS[l.employmentType]}`}
-                >
-                  {EMPLOYMENT_LABEL[l.employmentType]}
-                </span>
-              </div>
-
-              {/* workload limit + roll-up */}
-              <div className="hidden sm:block">
-                <WorkloadCell
-                  lecturer={l}
-                  limitCeiling={limitCeiling}
-                  onExceedToast={setLimitToast}
-                />
-              </div>
-
-              {/* active status */}
-              <StatusDot lecturer={l} />
-
-              {/* row actions — open the edit dialog, or queue the record
-                  for deletion behind a confirm guard (UC_CPM_01) */}
-              <div className="flex w-[88px] items-center gap-sm">
-                <button
-                  type="button"
-                  onClick={() => setEditing(l)}
-                  title={`Edit ${l.fullName}`}
-                  aria-label={`Edit ${l.fullName}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-primary hover:bg-primaryLight hover:text-primary active:scale-[0.97]"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeleting(l)}
-                  title={`Delete ${l.fullName}`}
-                  aria-label={`Delete ${l.fullName}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-error hover:bg-errorBg hover:text-errorText active:scale-[0.97]"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-            ))
-          )}
-        </div>
+              </td></tr>
+            ) : sorted.length === 0 ? (
+              <tr><td colSpan={7} className="px-lg py-xl text-center">
+                <p className="text-[14px] font-medium text-textNormal">No lecturer found</p>
+                <p className="mt-1 text-[12.5px] text-textSecondary">No staff member matches “{query.trim()}” with the selected filters.</p>
+              </td></tr>
+            ) : sorted.map((l) => (
+              <tr key={l.id} className="border-b border-divider transition-colors last:border-b-0 hover:bg-hoverBg/60">
+                <td className="py-md pl-lg pr-sm align-middle">
+                  <div data-sort-motion={`${l.id}:name`}>
+                    <p className="break-words text-[14px] font-semibold text-text">{l.fullName}</p>
+                    <p className="mt-[2px] text-[12px] leading-snug text-textSecondary">
+                      {l.position ?? "Lecturer"}
+                      {l.academicYearRecords > 0
+                        ? ` · ${l.academicYearRecords} academic-year record${l.academicYearRecords > 1 ? "s" : ""}` : ""}
+                    </p>
+                    <p className="mt-xs break-all text-[11.5px] leading-snug text-textSecondary">{l.email || "No email recorded"}</p>
+                    {l.phone && <p className="mt-[2px] text-[11.5px] text-textSecondary">{l.phone}</p>}
+                  </div>
+                </td>
+                <td className="px-sm py-md align-middle">
+                  <span data-sort-motion={`${l.id}:staffId`} className="inline-block rounded-badge bg-background px-sm py-1 text-[12px] font-medium tracking-[0.04em] text-textNormal">{l.staffId}</span>
+                </td>
+                <td className="px-sm py-md align-middle">
+                  <dl data-sort-motion={`${l.id}:profile`} className="min-w-0 space-y-xs break-words text-[12px] leading-snug">
+                    <div>
+                      <dt className="inline font-medium text-textNormal">Specialization: </dt>
+                      <dd className="inline text-textSecondary">{l.specialization?.trim() || "Not recorded"}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium text-textNormal">Area of Interest: </dt>
+                      <dd className="inline text-textSecondary">{l.areaOfInterest?.trim() || "Not recorded"}</dd>
+                    </div>
+                  </dl>
+                </td>
+                <td className="px-sm py-md align-middle">
+                  <div data-sort-motion={`${l.id}:classification`} className="flex flex-wrap gap-xs">
+                    {l.isPl && <span className="rounded-badge bg-primaryLight px-sm py-[3px] text-[11.5px] font-semibold text-primary">Programme Leader</span>}
+                    <span className={`rounded-badge px-sm py-[3px] text-[11.5px] font-semibold ${EMPLOYMENT_CLS[l.employmentType]}`}>{EMPLOYMENT_LABEL[l.employmentType]}</span>
+                  </div>
+                </td>
+                <td className="px-sm py-md align-middle">
+                  <div data-sort-motion={`${l.id}:workloadLimit`}>
+                    <WorkloadCell lecturer={l} limitCeiling={limitCeiling} onExceedToast={setLimitToast} />
+                  </div>
+                </td>
+                <td className="px-sm py-md align-middle"><div data-sort-motion={`${l.id}:status`}><StatusDot lecturer={l} /></div></td>
+                <td className="py-md pl-sm pr-lg align-middle">
+                  <div data-sort-motion={`${l.id}:actions`} className="flex w-[72px] items-center gap-sm">
+                    <button type="button" onClick={() => setEditing(l)} title={`Edit ${l.fullName}`} aria-label={`Edit ${l.fullName}`}
+                      className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-primary hover:bg-primaryLight hover:text-primary active:scale-[0.97]">
+                      <Pencil size={14} />
+                    </button>
+                    <button type="button" onClick={() => setDeleting(l)} title={`Delete ${l.fullName}`} aria-label={`Delete ${l.fullName}`}
+                      className="flex h-8 w-8 items-center justify-center rounded-button border border-divider bg-surface text-textNormal transition-all hover:border-error hover:bg-errorBg hover:text-errorText active:scale-[0.97]">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {/* hour-limit rules editor — role/course-based limits (editable);
@@ -2284,6 +2257,20 @@ export default function LecturersPage() {
           onSaved={() => {
             setAddOpen(false);
             setReloadTick((t) => t + 1);
+            window.dispatchEvent(new Event("tw:rail:refresh"));
+          }}
+        />
+      )}
+
+      {applyRulesOpen && (
+        <ApplyHourLimitRulesDialog
+          onClose={() => setApplyRulesOpen(false)}
+          onSaved={(message) => {
+            setApplyRulesOpen(false);
+            setLimitToast(null);
+            setWarningsOnly(false);
+            setReloadTick((t) => t + 1);
+            setStaffToast(message);
             window.dispatchEvent(new Event("tw:rail:refresh"));
           }}
         />

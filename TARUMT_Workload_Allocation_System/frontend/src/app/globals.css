@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+@media (prefers-reduced-motion: reduce) {
+  /* Sortable rosters use JavaScript FLIP motion and already skip it under
+     this preference. Prevent their legacy row-entry animation from being
+     restarted by a DOM reorder as well. */
+  [data-sort-motion] {
+    animation: none !important;
+  }
+}
+
 body {
   background: #f5f5f7;
   color: #424245;
@@ -225,4 +234,3 @@ body {
     transform: translateY(0) scale(1);
   }
 }
-

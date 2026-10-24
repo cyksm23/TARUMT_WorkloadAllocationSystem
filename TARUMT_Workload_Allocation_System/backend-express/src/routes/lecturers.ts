@@ -13,6 +13,7 @@
  */
 import { Router, Request, Response } from "express";
 import { getPool } from "../db";
+import { handleApplyHourLimitRules } from "../services/lecturer-limits";
 
 const router = Router();
 
@@ -47,6 +48,8 @@ router.get("/", async (_req: Request, res: Response) => {
         l.id,
         l.staff_id,
         l.full_name,
+        l.specialization,
+        l.area_of_interest,
         l.email,
         l.phone_number,
         l.position,
@@ -93,6 +96,8 @@ router.get("/", async (_req: Request, res: Response) => {
       id: r.id,
       staffId: r.staff_id,
       fullName: r.full_name,
+      specialization: r.specialization,
+      areaOfInterest: r.area_of_interest,
       email: r.email,
       phone: r.phone_number,
       position: r.position,
@@ -143,6 +148,17 @@ router.get("/", async (_req: Request, res: Response) => {
   } catch (err) {
     console.error("GET /api/lecturers failed", err);
     return res.status(500).json({ ok: false, message: "Lecturer directory unavailable." });
+  }
+});
+
+/* Explicit bulk action — previews all staff, then applies the reviewed rules. */
+router.post("/apply-hour-limit-rules", async (req: Request, res: Response) => {
+  try {
+    const result = await handleApplyHourLimitRules(getPool(), req.body);
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error("POST /api/lecturers/apply-hour-limit-rules failed:", error);
+    return res.status(500).json({ ok: false, message: "Workload limits could not be updated. No partial reset was saved." });
   }
 });
 
@@ -219,6 +235,11 @@ router.post("/", async (req: Request, res: Response) => {
   }
   const phone = optionalText("phone");
   const position = optionalText("position");
+  if (body.specialization !== undefined && body.specialization !== null &&
+      (typeof body.specialization !== "string" || body.specialization.trim().length > 200)) {
+    return res.status(400).json({ ok: false, message: "Specialization must be text with at most 200 characters." });
+  }
+  const specialization = optionalText("specialization");
 
   const isPl = body.isPl === true; /* Programme Leader drives the PL rule */
   const isActive = body.isActive !== false;
@@ -270,10 +291,10 @@ router.post("/", async (req: Request, res: Response) => {
     const insert = await getPool().query(
       `INSERT INTO lecturers
          (staff_id, full_name, email, phone_number, position, employment_type,
-          is_pl, is_active, min_limit_hours, max_limit_hours, department_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          is_pl, is_active, min_limit_hours, max_limit_hours, department_id, specialization)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING staff_id`,
-      [staffId, fullName, email, phone, position, employmentType, isPl, isActive, cleanMin, cleanMax, dep.id]
+      [staffId, fullName, email, phone, position, employmentType, isPl, isActive, cleanMin, cleanMax, dep.id, specialization]
     );
 
     if (insert.rowCount === 0) {
@@ -346,6 +367,11 @@ router.patch("/:staffId", async (req: Request, res: Response) => {
 
   if (!body) {
     return res.status(400).json({ ok: false, message: "Invalid request body." });
+  }
+
+  if (body.specialization !== undefined && body.specialization !== null &&
+      (typeof body.specialization !== "string" || body.specialization.trim().length > 200)) {
+    return res.status(400).json({ ok: false, message: "Specialization must be text with at most 200 characters." });
   }
 
   /* full name is mandatory — everything else optional / validated */
@@ -448,6 +474,7 @@ router.patch("/:staffId", async (req: Request, res: Response) => {
     update("email", text("email")),
     update("phone_number", text("phone")),
     update("position", text("position")),
+    ...(body.specialization !== undefined ? [update("specialization", text("specialization"))] : []),
     update("employment_type", employmentType),
     update("is_pl", body.isPl === true),
     update("is_active", body.isActive !== false),

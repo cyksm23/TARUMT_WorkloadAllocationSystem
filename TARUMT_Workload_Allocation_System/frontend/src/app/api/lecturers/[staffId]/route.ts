@@ -40,6 +40,11 @@ export async function PATCH(
     );
   }
 
+  if (body.specialization !== undefined && body.specialization !== null &&
+      (typeof body.specialization !== "string" || body.specialization.trim().length > 200)) {
+    return NextResponse.json({ ok: false, message: "Specialization must be text with at most 200 characters." }, { status: 400 });
+  }
+
   /* full name is mandatory — everything else optional / validated */
   const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
   if (!fullName) {
@@ -144,6 +149,7 @@ export async function PATCH(
     update("email", text("email")),
     update("phone_number", text("phone")),
     update("position", text("position")),
+    ...(body.specialization !== undefined ? [update("specialization", text("specialization"))] : []),
     update("employment_type", employmentType),
     update("is_pl", body.isPl === true),
     update("is_active", body.isActive !== false),

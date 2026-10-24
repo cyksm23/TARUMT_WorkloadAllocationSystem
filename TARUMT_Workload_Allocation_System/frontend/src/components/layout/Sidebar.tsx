@@ -15,7 +15,7 @@
  *       the toast slide-down)
  *     – hamburger icon does a full 180° spin
  *     – menu labels glide in from the left, staggered per row
- *     – live-count badges pop in from the right, staggered per row
+ *     – lecturer-limit warning badges pop in from the right
  *     – rows drift right on hover, icons scale up, press feedback squashes
  * · Functions come from the FYP module table (config/nav.ts): Dashboard +
  *   the ten module functions in one clean flat list.
@@ -40,12 +40,9 @@ interface SidebarProps {
   counts?: RailCounts | null;
 }
 
-/** right-aligned live count for special rows */
+/** Only lecturer-limit warnings show counts; other menu items stay label-only. */
 function countFor(href: string, counts: RailCounts | null | undefined): number | null {
   if (!counts) return null;
-  if (href === "/allocations") return counts.allocations;
-  if (href === "/ot-claims") return counts.overLimit;
-  if (href === "/courses") return counts.subjects;
   if (href === "/lecturers") return counts.lecturersOverRules;
   return null;
 }

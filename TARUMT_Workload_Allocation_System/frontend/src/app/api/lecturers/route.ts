@@ -61,6 +61,8 @@ export async function GET() {
         l.id,
         l.staff_id,
         l.full_name,
+        l.specialization,
+        l.area_of_interest,
         l.email,
         l.phone_number,
         l.position,
@@ -107,6 +109,8 @@ export async function GET() {
       id: r.id,
       staffId: r.staff_id,
       fullName: r.full_name,
+      specialization: r.specialization,
+      areaOfInterest: r.area_of_interest,
       email: r.email,
       phone: r.phone_number,
       position: r.position,
@@ -218,6 +222,11 @@ export async function POST(request: Request) {
   }
   const phone = optionalText("phone");
   const position = optionalText("position");
+  if (body.specialization !== undefined && body.specialization !== null &&
+      (typeof body.specialization !== "string" || body.specialization.trim().length > 200)) {
+    return NextResponse.json({ ok: false, message: "Specialization must be text with at most 200 characters." }, { status: 400 });
+  }
+  const specialization = optionalText("specialization");
 
   const isPl = body.isPl === true;
   const isActive = body.isActive !== false;
@@ -279,10 +288,10 @@ export async function POST(request: Request) {
     const insert = await getPool().query(
       `INSERT INTO lecturers
          (staff_id, full_name, email, phone_number, position, employment_type,
-          is_pl, is_active, min_limit_hours, max_limit_hours, department_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          is_pl, is_active, min_limit_hours, max_limit_hours, department_id, specialization)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING staff_id`,
-      [staffId, fullName, email, phone, position, employmentType, isPl, isActive, cleanMin, cleanMax, dep.id]
+      [staffId, fullName, email, phone, position, employmentType, isPl, isActive, cleanMin, cleanMax, dep.id, specialization]
     );
 
     if (insert.rowCount === 0) {
