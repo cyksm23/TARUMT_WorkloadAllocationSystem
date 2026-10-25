@@ -7,7 +7,7 @@
  * One page, two rosters behind a segmented switch (matching the sidebar's
  * single "Courses & Programmes" entry):
  *   · COURSES      — subjects joined with programme + academic year, hour
- *                    components (L/T/P), total hours (auto L+T+P),
+ *                    components (L/T/P), total credit hours (auto L+T+P),
  *                    students/groups, status.
  *   · PROGRAMMES   — programme directory with department, level, duration
  *                    and a live count of the courses inside it.
@@ -69,7 +69,6 @@ interface CourseRow {
   programmeName: string;
   academicYearId: number | null;
   academicYearLabel: string;
-  creditHours: number;
   lectureHours: number;
   tutorialHours: number;
   practicalHours: number;
@@ -125,7 +124,7 @@ const LEVELS = ["Bachelor", "Master", "Diploma", "Foundation"] as const;
 
 const COURSE_SORT_LABELS: Record<CourseSortKey, string> = {
   course: "Course",
-  hours: "Hours",
+  hours: "Total credit hours",
   students: "Students",
   status: "Status",
 };
@@ -143,9 +142,14 @@ const compareCourseIdentity = (a: CourseRow, b: CourseRow) =>
   a.subjectCode.localeCompare(b.subjectCode, undefined, { numeric: true }) ||
   a.subjectName.localeCompare(b.subjectName);
 
+const courseTotalCreditHours = (course: CourseRow) =>
+  Number(course.lectureHours) + Number(course.tutorialHours) + Number(course.practicalHours);
+
+const formatCourseHour = (value: number) => Number(value).toFixed(1);
+
 const COURSE_SORTERS: Record<CourseSortKey, (a: CourseRow, b: CourseRow) => number> = {
   course: compareCourseIdentity,
-  hours: (a, b) => a.totalHours - b.totalHours,
+  hours: (a, b) => courseTotalCreditHours(a) - courseTotalCreditHours(b),
   students: (a, b) => a.studentCount - b.studentCount,
   status: (a, b) => Number(b.isActive) - Number(a.isActive),
 };
@@ -169,7 +173,7 @@ const PROGRAMME_SORTERS: Record<ProgrammeSortKey, (a: ProgrammeRow, b: Programme
    and narrower windows scroll the table horizontally instead of squeezing
    columns. Fixed-width tail columns keep Status/Actions pinned. */
 const COURSE_GRID =
-  "grid grid-cols-[2.2fr_1.5fr_1.5fr_1fr_0.9fr_86px_96px] items-center gap-x-md";
+  "grid grid-cols-[2.2fr_1.5fr_1.5fr_1.5fr_0.9fr_86px_96px] items-center gap-x-md";
 const PROGRAMME_GRID =
   "grid grid-cols-[2.6fr_1fr_1.1fr_0.8fr_1fr_86px_96px] items-center gap-x-md";
 
@@ -2351,17 +2355,13 @@ export default function CoursesPage() {
   const [courseProgramme, setCourseProgramme] = useState("all");
   const [courseAcademicYear, setCourseAcademicYear] = useState("all");
   const [courseStatus, setCourseStatus] = useState<Triage>("all");
-  const [courseSorts, setCourseSorts] = useState<SortCriterion<CourseSortKey>[]>([
-    { key: "course", direction: "asc" },
-  ]);
+  const [courseSorts, setCourseSorts] = useState<SortCriterion<CourseSortKey>[]>([]);
 
   /* programme filters */
   const [progQuery, setProgQuery] = useState("");
   const [progLevel, setProgLevel] = useState("all");
   const [progStatus, setProgStatus] = useState<Triage>("all");
-  const [progSorts, setProgSorts] = useState<SortCriterion<ProgrammeSortKey>[]>([
-    { key: "programme", direction: "asc" },
-  ]);
+  const [progSorts, setProgSorts] = useState<SortCriterion<ProgrammeSortKey>[]>([]);
 
   /* dialogs */
   const [addCourseOpen, setAddCourseOpen] = useState(false);
@@ -2566,7 +2566,6 @@ export default function CoursesPage() {
   const afterSave = (toast: string, reset: () => void) => {
     reset();
     setReloadTick((t) => t + 1);
-    window.dispatchEvent(new Event("tw:rail:refresh"));
     setItemToast(toast);
   };
 
@@ -2587,7 +2586,11 @@ export default function CoursesPage() {
         <div className="animate-[badgeIn_0.25s_ease-out_0.1s_both] flex items-center gap-sm">
           <ViewSwitch
             view={view}
-            onChange={setView}
+            onChange={(nextView) => {
+              setView(nextView);
+              setCourseSorts([]);
+              setProgSorts([]);
+            }}
             coursesCount={courseCounts.total}
             programmesCount={programmeCounts.total}
           />
@@ -2779,9 +2782,9 @@ export default function CoursesPage() {
                   <p className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-textSecondary">
                     Academic Year
                   </p>
-                  <SortableGridHeader label="Hours (L · T · P)" direction={courseSortDirection("hours")}
+                  <SortableGridHeader label="Total credit hours" direction={courseSortDirection("hours")}
                     priority={courseSortPriority("hours")} onSort={() => toggleCourseSort("hours")}
-                    description="Sort by total credit hours" />
+                    description="Sort by total credit hours calculated from lecture, tutorial and practical hours" />
                   <SortableGridHeader label="Students" direction={courseSortDirection("students")}
                     priority={courseSortPriority("students")} onSort={() => toggleCourseSort("students")} />
                   <SortableGridHeader label="Status" direction={courseSortDirection("status")}
@@ -2818,10 +2821,6 @@ export default function CoursesPage() {
                           <p className="text-[14px] font-semibold leading-snug text-text">
                             <span className="text-primary">{c.subjectCode}</span> · {c.subjectName}
                           </p>
-                          <p className="mt-[2px] text-[12px] leading-snug text-textSecondary">
-                            {c.totalHours} total credit hour
-                            {Number(c.totalHours) === 1 ? "" : "s"}
-                          </p>
                         </div>
 
                         {/* programme */}
@@ -2844,12 +2843,15 @@ export default function CoursesPage() {
                         </p>
 
                         {/* hours */}
-                        <div className="min-w-0">
-                          <p className="text-[12.5px] font-medium text-text">
-                            {c.lectureHours} · {c.tutorialHours} · {c.practicalHours}
+                        <div className="min-w-0" data-course-total-credit-hours={formatCourseHour(courseTotalCreditHours(c))}>
+                          <p className="text-[12.5px] font-semibold text-primary">
+                            {formatCourseHour(courseTotalCreditHours(c))} total credit hours
                           </p>
-                          <p className="text-[11.5px] leading-snug text-textSecondary">
-                            lecture · tut · prac / wk
+                          <p className="mt-[2px] text-[11.5px] font-medium leading-snug text-textNormal">
+                            {formatCourseHour(Number(c.lectureHours))} + {formatCourseHour(Number(c.tutorialHours))} + {formatCourseHour(Number(c.practicalHours))}
+                          </p>
+                          <p className="text-[10.5px] leading-snug text-textSecondary">
+                            lecture + tut + prac
                           </p>
                         </div>
 

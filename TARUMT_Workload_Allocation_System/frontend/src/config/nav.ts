@@ -8,7 +8,7 @@
  *   Overtime & Reporting  → OT Claim Calculation (OT Claims) + Report
  *                           Generation (Reports) — combined into one entry
  *   Course & Lab Mgmt     → Courses & Programmes · Lecturers · Lab Management
- *                           · Course Suggestion
+ *                           · Course History
  * Ordered by the PL's daily workflow: Dashboard first, then Lecturers, then
  * Courses & Programmes, then Course Assignment (+ Moderator Assignment) —
  * the remaining modules follow. Class Splitting is not a sidebar entry (it
@@ -47,7 +47,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Teaching Hours", href: "/workloads", icon: Clock },
   { label: "OT Claims & Reports", href: "/ot-claims", icon: Coins },
   { label: "Lab Management", href: "/labs", icon: FlaskConical },
-  { label: "Course Suggestion", href: "/suggestions", icon: History },
+  { label: "Course History", href: "/coursehistory", icon: History },
 ];
 
 /** Path → page title. The Reports page shares the combined OT entry. */
@@ -64,13 +64,4 @@ export function titleForPath(pathname: string): string {
 
 export function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
-}
-
-/** Live counters shown as right-aligned badges in the navigation panel. */
-export interface RailCounts {
-  allocations: number;
-  overLimit: number;
-  subjects: number;
-  /** lecturers whose saved limit pair is outside the rules' allowed range */
-  lecturersOverRules: number;
 }

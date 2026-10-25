@@ -174,18 +174,6 @@ body {
   animation: toastOut 0.24s cubic-bezier(0.34, 1.28, 0.64, 1) both;
 }
 
-/* sidebar alert badge — the ⚠ count pill shrinks back and fades on clear */
-@keyframes badgeOut {
-  from {
-    opacity: 1;
-    transform: translateX(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(10px) scale(0.85);
-  }
-}
-
 /* sidebar expand — menu labels glide in from the left, staggered */
 @keyframes labelIn {
   from {
@@ -198,7 +186,7 @@ body {
   }
 }
 
-/* sidebar expand — count badges pop in from the right, staggered */
+/* badges and compact controls pop in from the right */
 @keyframes badgeIn {
   from {
     opacity: 0;
@@ -220,6 +208,163 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Course History — motion stays local to the element being changed so a
+   programme switch never looks like a browser/page refresh. */
+@keyframes historyReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.history-reveal {
+  animation: historyReveal 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes historyProgrammeSelect {
+  0% {
+    transform: scale(0.985);
+  }
+  58% {
+    transform: scale(1.012);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.history-programme-selected {
+  animation: historyProgrammeSelect 0.34s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+
+@keyframes historyContentIn {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.history-content-enter {
+  animation: historyContentIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes historyPanelIn {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes historyPanelOut {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+}
+
+.history-panel-enter,
+.history-panel-exit {
+  display: grid;
+  min-width: 0;
+  transform-origin: top;
+}
+
+.history-panel-enter {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  animation: historyPanelIn 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.history-panel-exit {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  animation: historyPanelOut 0.28s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes historySlotIn {
+  from {
+    opacity: 0;
+    transform: translateX(-7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.history-slot-enter {
+  animation: historySlotIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes historyIconSwap {
+  0% {
+    opacity: 0;
+    transform: scale(0.65) rotate(-18deg);
+  }
+  70% {
+    transform: scale(1.12) rotate(3deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+.history-icon-swap {
+  animation: historyIconSwap 0.28s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+
+@keyframes historyLoadingSweep {
+  from {
+    transform: translateX(-150%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+
+.history-loading-bar {
+  animation: historyLoadingSweep 1.05s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-reveal,
+  .history-programme-selected,
+  .history-content-enter,
+  .history-panel-enter,
+  .history-panel-exit,
+  .history-slot-enter,
+  .history-icon-swap,
+  .history-loading-bar {
+    animation: none !important;
+  }
+
+  [data-history-motion] {
+    transform: none !important;
+    transition: none !important;
   }
 }
 

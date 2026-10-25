@@ -1788,7 +1788,9 @@ export default function LecturersPage() {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [departmentFilter, setDepartmentFilter] = useState<string>("all");
-  const [sorts, setSorts] = useState<LecturerSort[]>([{ key: "name", direction: "asc" }]);
+  /* Sort order is intentionally page-local and starts empty after navigation
+     or refresh; the PostgreSQL directory order is shown until a header click. */
+  const [sorts, setSorts] = useState<LecturerSort[]>([]);
   /** lecturer currently opened in the edit dialog (null = closed) */
   const [editing, setEditing] = useState<LecturerRow | null>(null);
   /** bumped after each successful save — refetches the directory */
@@ -2207,15 +2209,13 @@ export default function LecturersPage() {
         </table>
       </div>
 
-      {/* hour-limit rules editor — role/course-based limits (editable);
-          a fresh save also re-resolves the sidebar's ⚠ sum via rail refresh */}
+      {/* hour-limit rules editor — role/course-based limits (editable) */}
       <div ref={rulesAnchorRef} className="scroll-mt-[88px]">
         <RulesEditor
           rules={rules}
           staffCountByRule={staffCountByRule}
           onSaved={() => {
             setReloadTick((t) => t + 1);
-            window.dispatchEvent(new Event("tw:rail:refresh"));
           }}
         />
       </div>
@@ -2241,7 +2241,6 @@ export default function LecturersPage() {
             setEditing(null);
             setLimitToast(null);
             setReloadTick((t) => t + 1);
-            window.dispatchEvent(new Event("tw:rail:refresh"));
           }}
         />
       )}
@@ -2257,7 +2256,6 @@ export default function LecturersPage() {
           onSaved={() => {
             setAddOpen(false);
             setReloadTick((t) => t + 1);
-            window.dispatchEvent(new Event("tw:rail:refresh"));
           }}
         />
       )}
@@ -2271,7 +2269,6 @@ export default function LecturersPage() {
             setWarningsOnly(false);
             setReloadTick((t) => t + 1);
             setStaffToast(message);
-            window.dispatchEvent(new Event("tw:rail:refresh"));
           }}
         />
       )}
@@ -2284,7 +2281,6 @@ export default function LecturersPage() {
           onDeleted={(deleted) => {
             setDeleting(null);
             setReloadTick((t) => t + 1);
-            window.dispatchEvent(new Event("tw:rail:refresh"));
             setStaffToast(
               `The staff member ${deleted.fullName} (${deleted.staffId}) has been deleted successfully.`
             );

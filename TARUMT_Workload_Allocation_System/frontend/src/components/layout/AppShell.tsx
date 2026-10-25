@@ -11,19 +11,16 @@
  * always visible on every screen size) + TopNav header + content area.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { apiFetch } from "@/services/apiClient";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock } from "lucide-react";
 import Sidebar from "./Sidebar";
 import TopNav from "./TopNav";
-import type { RailCounts } from "@/config/nav";
 import { getAuth, clearAuth, type AuthSession } from "@/services/auth";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [session, setSession] = useState<AuthSession | null>(null);
-  const [counts, setCounts] = useState<RailCounts | null>(null);
   const [ready, setReady] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -41,33 +38,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
     setReady(true);
   }, [router]);
-
-  /* live counters for the menu badges (same source as the dashboard cards).
-     Pages dispatch "tw:rail:refresh" after successful mutations (fixing a
-     lecturer's limit, saving rules, …) so badges re-resolve instantly —
-     the Lecturers ⚠ sum always mirrors the roster's warning buttons. */
-  const refreshCounts = useCallback(() => {
-    apiFetch("/api/dashboard/summary")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.ok) {
-          setCounts({
-            allocations: d.allocations.total,
-            overLimit: d.allocations.overLimit,
-            subjects: d.courses.activeSubjects,
-            lecturersOverRules: d.lecturers?.limitAlerts ?? 0,
-          });
-        }
-      })
-      .catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
-    if (!session) return;
-    refreshCounts();
-    window.addEventListener("tw:rail:refresh", refreshCounts);
-    return () => window.removeEventListener("tw:rail:refresh", refreshCounts);
-  }, [session, refreshCounts]);
 
   /* still resolving localStorage on first paint */
   if (!ready) {
@@ -128,7 +98,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         }`}
         style={{ transitionTimingFunction: "cubic-bezier(0.34, 1.28, 0.64, 1)" }}
       >
-        <Sidebar expanded={expanded} onToggle={() => setExpanded((o) => !o)} counts={counts} />
+        <Sidebar expanded={expanded} onToggle={() => setExpanded((o) => !o)} />
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">

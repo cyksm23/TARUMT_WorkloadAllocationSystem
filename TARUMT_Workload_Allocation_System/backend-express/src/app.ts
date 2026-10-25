@@ -3,6 +3,7 @@ import express from "express";
 import allocationsRouter from "./routes/allocations";
 import authRouter from "./routes/auth";
 import classSizesRouter from "./routes/class-sizes";
+import courseHistoryRouter from "./routes/course-history";
 import coursesRouter from "./routes/courses";
 import dashboardRouter from "./routes/dashboard";
 import lecturersRouter from "./routes/lecturers";
@@ -46,6 +47,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/allocations", allocationsRouter);
 app.use("/api/class-size-rules", classSizesRouter);
+app.use("/api/course-history", courseHistoryRouter);
 app.use("/api/courses", coursesRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/lecturers", lecturersRouter);

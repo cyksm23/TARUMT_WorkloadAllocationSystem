@@ -97,10 +97,10 @@ const MODULE_LAUNCHERS: Array<{
     description: "Schedule and track Lab 1, Lab 2 and Third Remarks practical sessions.",
   },
   {
-    label: "Course Suggestion",
-    href: "/suggestions",
+    label: "Course History",
+    href: "/coursehistory",
     icon: History,
-    description: "Reuse the previous academic year's term allocations as editable suggestions.",
+    description: "Review saved course-to-lecturer assignments by academic term and programme.",
   },
 ];
 

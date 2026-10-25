@@ -574,9 +574,7 @@ export default function AllocationsPage() {
   const [programme, setProgramme] = useState("all");
   const [academicYears, setAcademicYears] = useState<AcademicYearTerm[]>([]);
   const [academicYear, setAcademicYear] = useState("all");
-  const [sorts, setSorts] = useState<SortCriterion<SortKey>[]>([
-    { key: "course", direction: "asc" },
-  ]);
+  const [sorts, setSorts] = useState<SortCriterion<SortKey>[]>([]);
   const [query, setQuery] = useState("");
 
   /* load the course directory (same payload the Courses module serves) plus
@@ -654,7 +652,6 @@ export default function AllocationsPage() {
         setAssigning(null);
         setItemToast(d.message);
         setReloadTick((t) => t + 1); /* roster + Lecturer column reload from the DB */
-        window.dispatchEvent(new Event("tw:rail:refresh"));
         return null;
       }
       return d.message ?? "The assignment could not be saved.";
@@ -672,7 +669,6 @@ export default function AllocationsPage() {
         setAssigning(null);
         setItemToast(d.message);
         setReloadTick((t) => t + 1);
-        window.dispatchEvent(new Event("tw:rail:refresh"));
         return null;
       }
       return d.message ?? "The assignment could not be removed.";
@@ -1042,7 +1038,6 @@ export default function AllocationsPage() {
             setAutoAssignOpen(false);
             setItemToast(message);
             setReloadTick((tick) => tick + 1);
-            window.dispatchEvent(new Event("tw:rail:refresh"));
           }}
         />
       )}
